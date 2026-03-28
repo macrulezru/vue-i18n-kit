@@ -1,0 +1,68 @@
+{
+  "name": "vue-i18n-kit",
+  "version": "0.1.0",
+  "description": "Vue 3 localization plugin with lazy loading, composables, CLI, and Vite integration",
+  "main": "./dist/index.js",
+  "module": "./dist/index.mjs",
+  "types": "./dist/index.d.ts",
+  "bin": {
+    "vue-i18n-kit": "./dist/cli/index.js"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.mjs",
+      "require": "./dist/index.js"
+    },
+    "./vite": {
+      "types": "./dist/vite-plugin/index.d.ts",
+      "import": "./dist/vite-plugin/index.mjs",
+      "require": "./dist/vite-plugin/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "prepublishOnly": "npm run build",
+    "prebuild": "node -e \"require('fs').rmSync('dist', { recursive: true, force: true })\"",
+    "build": "tsup",
+    "dev": "tsup --watch",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
+    "typecheck": "tsc --noEmit"
+  },
+  "peerDependencies": {
+    "vue": "^3.3.0",
+    "vue-i18n": "^9.0.0",
+    "vite": ">=5.0.0"
+  },
+  "peerDependenciesMeta": {
+    "vite": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@types/node": "^20.17.14",
+    "@vue/test-utils": "^2.4.6",
+    "happy-dom": "^15.7.4",
+    "tsup": "^8.3.5",
+    "typescript": "^5.7.3",
+    "vitest": "^2.1.8",
+    "vite": "^5.4.14",
+    "vue": "^3.5.13",
+    "vue-i18n": "^9.14.1"
+  },
+  "keywords": [
+    "vue",
+    "vue3",
+    "i18n",
+    "localization",
+    "vue-i18n",
+    "composable",
+    "vite-plugin",
+    "cli"
+  ],
+  "license": "MIT"
+}
