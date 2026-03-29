@@ -730,6 +730,173 @@ vue-i18n-kit check --default en --fail
 
 ---
 
+## Locale Editor UI (alpha version)
+
+A browser-based editor for viewing and editing locale files directly in your project — no external service, runs entirely on your machine.
+
+### What it does
+
+- **Table view** — all translation keys as rows, one column per locale
+- **Inline editing** — click any translation value to edit it in place; save with ✓ or Enter, cancel with ✕ or Escape; changes are written immediately to the locale JSON file on disk
+- **Usage map** — click any key in the left column to see which source files use it (`t()`, `tm()`, `$t()` calls are scanned automatically)
+- **Missing key detection** — cells with no translation are highlighted
+
+### Setup
+
+**1. Register the map plugin in `vite.config.ts`:**
+
+```ts
+import { vueI18nMapPlugin } from 'vue-i18n-kit/vite'
+
+export default defineConfig({
+  plugins: [
+    vue(),
+    vueI18nMapPlugin({
+      locales: {
+        en: { path: 'src/locales/en.json', meta: { display: 'English' } },
+        ru: { path: 'src/locales/ru.json', meta: { display: 'Русский' } },
+      },
+    }),
+  ],
+})
+```
+
+**2. Add the script to `package.json`:**
+
+```json
+"i18n:ui": "vite --mode i18n-dump && vue-i18n-kit ui"
+```
+
+**3. Run:**
+
+```bash
+npm run i18n:ui
+```
+
+The editor opens at `http://localhost:4173`. Every run regenerates the locale map and usage index from the current project state before starting the server.
+
+### Options
+
+#### `vueI18nMapPlugin(options)`
+
+| Option | Type | Default | Description |
+|---|---|---|---|
+| `locales` | `Record<string, string \| I18nMapLocaleConfig>` | — | **Required.** Map of locale codes to file paths and optional metadata. |
+| `output` | `string` | `'i18n-tools/locales.config.json'` | Output path for the generated locale map, relative to project root. |
+
+Each locale entry accepts either a plain path string or `{ path, meta? }`:
+
+```ts
+locales: {
+  en: 'src/locales/en.json',                                           // plain path
+  ru: { path: 'src/locales/ru.json', meta: { display: 'Русский' } },  // with metadata
+}
+```
+
+#### `vue-i18n-kit ui`
+
+```bash
+vue-i18n-kit ui [--port <number>]
+```
+
+| Flag | Default | Description |
+|---|---|---|
+| `--port <number>` | `4173` | Port for the local editor server. |
+
+### Generated files
+
+Running `vite --mode i18n-dump` creates two files in `i18n-tools/` (can be added to `.gitignore`):
+
+| File | Contents |
+|---|---|
+| `locales.config.json` | Resolved absolute paths and metadata for each locale |
+| `locales.entries.json` | Map of `{ "key": ["src/file.vue", …] }` — where each key is used in the project |
+
+---
+
+## Nuxt & SSR
+
+`vue-i18n-kit` is SSR-safe. Plugin state is stored per Vue app instance via `provide/inject` instead of a module-level singleton, so concurrent SSR requests cannot contaminate each other.
+
+`localStorage` calls (used by `persistLocale`) are silently no-op on the server — `try/catch` handles the missing global.
+
+### Nuxt setup
+
+**1. Create `plugins/i18n.ts`:**
+
+```ts
+// plugins/i18n.ts
+import { defineNuxtPlugin } from '#app'
+import { createVueI18nPlugin } from 'vue-i18n-kit'
+
+export default defineNuxtPlugin((nuxtApp) => {
+  nuxtApp.vueApp.use(
+    createVueI18nPlugin({
+      defaultLocale: 'en',
+      fallbackLocale: 'en',
+      locales: {
+        en: {
+          messages: () => import('~/locales/en.json'),
+          meta: { display: 'English', flag: '🇬🇧' },
+        },
+        ru: {
+          messages: () => import('~/locales/ru.json'),
+          meta: { display: 'Русский', flag: '🇷🇺' },
+        },
+      },
+    }),
+  )
+})
+```
+
+**2. Use composables in components — same as SPA:**
+
+```vue
+<script setup lang="ts">
+import { useT, useLocale } from 'vue-i18n-kit'
+
+const { t } = useT()
+const { locale, setLocale } = useLocale()
+</script>
+```
+
+### Server-side locale detection
+
+To pick the locale based on the `Accept-Language` header instead of a fixed default, read it in the plugin before calling `createVueI18nPlugin`:
+
+```ts
+// plugins/i18n.ts
+import { defineNuxtPlugin, useRequestHeaders } from '#app'
+import { createVueI18nPlugin } from 'vue-i18n-kit'
+
+const SUPPORTED = ['en', 'ru']
+
+export default defineNuxtPlugin((nuxtApp) => {
+  const headers = useRequestHeaders(['accept-language'])
+  const accepted = headers['accept-language'] ?? ''
+  const detected = SUPPORTED.find((code) => accepted.toLowerCase().includes(code))
+
+  nuxtApp.vueApp.use(
+    createVueI18nPlugin({
+      defaultLocale: detected ?? 'en',
+      fallbackLocale: 'en',
+      locales: {
+        en: () => import('~/locales/en.json'),
+        ru: () => import('~/locales/ru.json'),
+      },
+    }),
+  )
+})
+```
+
+### Notes
+
+- **`persistLocale`** — works on the client only; on the server it is silently ignored (no `localStorage`). It is safe to leave `persistLocale: true` in a Nuxt app — the plugin handles the missing global.
+- **Hydration** — the server and client render with the same `defaultLocale` (or the detected one). If you use `persistLocale`, the client will restore the user's saved locale after hydration.
+- **Vite plugin and CLI** — work the same way in Nuxt projects. Add `vueI18nMapPlugin` to `nuxt.config.ts` under `vite.plugins`.
+
+---
+
 ## Advanced: Passing Extra vue-i18n Options
 
 Anything accepted by `vue-i18n`'s `createI18n` can be forwarded through `vueI18nOptions`:
@@ -755,7 +922,7 @@ src/
 ├── index.ts                        # Public API re-exports (browser/universal)
 ├── plugin.ts                       # createVueI18nPlugin()
 ├── createI18n.ts                   # vue-i18n instance factory
-├── state.ts                        # Module-level singleton (plugin context)
+├── state.ts                        # Per-app state via provide/inject (SSR-safe)
 ├── types/
 │   └── index.ts                    # I18nPluginOptions, LocaleMessages, LocaleEntry
 ├── composables/
@@ -770,7 +937,16 @@ src/
 │   ├── localeKeys.ts               # flattenKeys, compareLocales (shared by CLI + Vite plugin)
 │   └── localeEntry.ts              # isLocaleDefinition, extractMessages, extractMeta
 ├── vite-plugin/
-│   └── index.ts                    # vueI18nCheckPlugin (Node.js, optional)
+│   └── index.ts                    # vueI18nCheckPlugin + vueI18nMapPlugin (Node.js, optional)
+├── ui-app/                         # Locale editor Vue SPA (built to dist/ui-server/public/)
+│   ├── index.html
+│   ├── main.ts
+│   ├── App.vue
+│   ├── api.ts
+│   └── components/
+│       └── LocaleTable.vue
+├── ui-server/
+│   └── server.ts                   # Node.js HTTP server for the locale editor
 └── cli/
     ├── index.ts                    # CLI entry point (bin: vue-i18n-kit)
     └── commands/
@@ -784,8 +960,8 @@ The package ships three independent entry points:
 | Import | Description |
 |---|---|
 | `vue-i18n-kit` | Runtime composables and plugin — for Vue apps |
-| `vue-i18n-kit/vite` | Vite plugin — for `vite.config.ts` |
-| `vue-i18n-kit` (bin) | CLI — invoked as `npx vue-i18n-kit` |
+| `vue-i18n-kit/vite` | Vite plugins (`vueI18nCheckPlugin`, `vueI18nMapPlugin`) — for `vite.config.ts` |
+| `vue-i18n-kit` (bin) | CLI — `init`, `add`, `check`, `ui` commands |
 
 ---
 

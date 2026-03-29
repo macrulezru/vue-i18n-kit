@@ -1,7 +1,8 @@
 import { ref } from 'vue'
 import type { App, Plugin } from 'vue'
 import { createI18nInstance } from './createI18n'
-import { getState, setState } from './state'
+import { I18N_KIT_KEY } from './state'
+import type { I18nKitState } from './state'
 import { loadLocale } from './utils/loadLocale'
 import { loadPersistedLocale, saveLocale } from './utils/persistLocale'
 import { extractMessages, isLocaleDefinition } from './utils/localeEntry'
@@ -11,10 +12,12 @@ const DEFAULT_STORAGE_KEY = 'vue3-i18n-locale'
 
 /**
  * Loads messages for a locale and registers them on the i18n instance.
+ * Accepts the per-app state explicitly so this function is SSR-safe and can
+ * be called from both composables (via `useLocale`) and server entry points.
+ *
  * Throws if the locale is not registered in the plugin options.
  */
-export async function setLocale(lang: string): Promise<void> {
-  const state = getState()
+export async function setLocale(state: I18nKitState, lang: string): Promise<void> {
   const { options, i18n, isLoading, loadedLocales, storageKey } = state
 
   if (!options.locales[lang]) {
@@ -94,7 +97,9 @@ export function createVueI18nPlugin(options: I18nPluginOptions): Plugin {
 
       const i18n = createI18nInstance(options, initialMessages, requestedLocale)
 
-      setState({ i18n, options, isLoading, loadedLocales, storageKey })
+      // Provide per-app state — SSR-safe, no module-level singleton
+      const state: I18nKitState = { i18n, options, isLoading, loadedLocales, storageKey }
+      app.provide(I18N_KIT_KEY, state)
 
       app.use(i18n)
 
