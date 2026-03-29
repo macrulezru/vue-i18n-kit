@@ -1,5 +1,5 @@
 import { computed } from 'vue'
-import { getState } from '../state'
+import { useI18nKitState } from '../state'
 import { extractMeta } from '../utils/localeEntry'
 import type { ComputedRef } from 'vue'
 import type { LocaleInfo } from '../types'
@@ -34,7 +34,7 @@ export interface UseAvailableLocalesReturn<
 export function useAvailableLocales<
   TMeta extends Record<string, unknown> = Record<string, unknown>,
 >(): UseAvailableLocalesReturn<TMeta> {
-  const { options } = getState()
+  const { options } = useI18nKitState()
 
   const availableLocales = computed<LocaleInfo<TMeta>[]>(() =>
     Object.entries(options.locales).map(([code, entry]) => ({

@@ -1,7 +1,6 @@
 import { createApp, defineComponent, h } from 'vue'
 import { mount } from '@vue/test-utils'
 import { createVueI18nPlugin } from '../src/plugin'
-import { _resetState } from '../src/state'
 import type { I18nPluginOptions } from '../src/types'
 
 export const ruMessages = {
@@ -27,7 +26,6 @@ export const defaultOptions: I18nPluginOptions = {
 
 /** Installs the plugin into a real Vue app and returns the app instance. */
 export function createTestApp(options: I18nPluginOptions = defaultOptions) {
-  _resetState()
   const app = createApp({ render: () => h('div') })
   app.use(createVueI18nPlugin(options))
   return app
@@ -38,7 +36,6 @@ export function mountWithI18n<T>(
   composable: () => T,
   options: I18nPluginOptions = defaultOptions,
 ): { result: T } {
-  _resetState()
   const plugin = createVueI18nPlugin(options)
 
   let result!: T

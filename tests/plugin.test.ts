@@ -1,11 +1,10 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest'
+import { describe, it, expect, beforeEach } from 'vitest'
 import { createApp, h } from 'vue'
 import { createVueI18nPlugin } from '../src/plugin'
-import { getState, _resetState } from '../src/state'
+import { getState } from '../src/state'
 import { defaultOptions, ruMessages } from './helpers'
 
 beforeEach(() => {
-  _resetState()
   localStorage.clear()
 })
 
@@ -18,7 +17,7 @@ describe('createVueI18nPlugin — installation', () => {
   it('sets plugin state after install', () => {
     const app = createApp({ render: () => h('div') })
     app.use(createVueI18nPlugin(defaultOptions))
-    const state = getState()
+    const state = getState(app)
     expect(state).toBeDefined()
     expect(state.options).toBe(defaultOptions)
   })
@@ -26,14 +25,14 @@ describe('createVueI18nPlugin — installation', () => {
   it('sets initial locale to defaultLocale', () => {
     const app = createApp({ render: () => h('div') })
     app.use(createVueI18nPlugin(defaultOptions))
-    const state = getState()
+    const state = getState(app)
     expect(state.i18n.global.locale.value).toBe('ru')
   })
 
   it('pre-loads synchronous locale messages', () => {
     const app = createApp({ render: () => h('div') })
     app.use(createVueI18nPlugin(defaultOptions))
-    const state = getState()
+    const state = getState(app)
     expect(state.loadedLocales.has('ru')).toBe(true)
   })
 
@@ -47,13 +46,25 @@ describe('createVueI18nPlugin — installation', () => {
     }
     const app = createApp({ render: () => h('div') })
     app.use(createVueI18nPlugin(lazyOptions))
-    const state = getState()
+    const state = getState(app)
     expect(state.loadedLocales.has('ru')).toBe(false)
     expect(state.isLoading.value).toBe(true)
   })
 
-  it('throws if getState called before plugin install', () => {
-    expect(() => getState()).toThrow('[vue-i18n-kit]')
+  it('throws if getState called on app without plugin installed', () => {
+    const app = createApp({ render: () => h('div') })
+    expect(() => getState(app)).toThrow('[vue-i18n-kit]')
+  })
+
+  it('two app instances carry independent state', () => {
+    const app1 = createApp({ render: () => h('div') })
+    const app2 = createApp({ render: () => h('div') })
+
+    app1.use(createVueI18nPlugin(defaultOptions))
+    app2.use(createVueI18nPlugin({ ...defaultOptions, defaultLocale: 'en' }))
+
+    expect(getState(app1).i18n.global.locale.value).toBe('ru')
+    expect(getState(app2).i18n.global.locale.value).toBe('en')
   })
 })
 
@@ -64,7 +75,7 @@ describe('createVueI18nPlugin — persistLocale', () => {
     const app = createApp({ render: () => h('div') })
     app.use(createVueI18nPlugin({ ...defaultOptions, persistLocale: true }))
 
-    const state = getState()
+    const state = getState(app)
     expect(state.i18n.global.locale.value).toBe('en')
   })
 
@@ -74,7 +85,7 @@ describe('createVueI18nPlugin — persistLocale', () => {
     const app = createApp({ render: () => h('div') })
     app.use(createVueI18nPlugin({ ...defaultOptions, persistLocale: true }))
 
-    const state = getState()
+    const state = getState(app)
     expect(state.i18n.global.locale.value).toBe('ru')
   })
 
@@ -90,7 +101,7 @@ describe('createVueI18nPlugin — persistLocale', () => {
       }),
     )
 
-    const state = getState()
+    const state = getState(app)
     expect(state.i18n.global.locale.value).toBe('en')
   })
 })

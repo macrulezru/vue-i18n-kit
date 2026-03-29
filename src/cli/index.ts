@@ -1,7 +1,7 @@
-#!/usr/bin/env node
 import { runInit } from './commands/init.js'
 import { runAdd } from './commands/add.js'
 import { runCheck } from './commands/check.js'
+import { startUiServer } from '../ui-server/server.js'
 
 const VERSION = '0.1.0'
 
@@ -63,6 +63,13 @@ switch (command) {
     break
   }
 
+  case 'ui': {
+    const flags = parseFlags(rest)
+    const port = typeof flags['port'] === 'string' ? parseInt(flags['port'], 10) : 4173
+    startUiServer({ cwd: process.cwd(), port })
+    break
+  }
+
   case '--version':
   case '-v':
     console.log(VERSION)
@@ -87,9 +94,13 @@ Commands:
     --default <locale>          Reference locale        (default: first alphabetically)
     --fail                      Exit with code 1 if any keys are missing
 
+  ui [options]                  Start the locale editor UI
+    --port <number>             Port to listen on       (default: 4173)
+
 Examples:
   npx vue-i18n-kit init --locales en,ru,de
   npx vue-i18n-kit add fr --from en --empty
   npx vue-i18n-kit check --default en --fail
+  npx vue-i18n-kit ui
 `)
 }

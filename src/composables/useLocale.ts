@@ -1,7 +1,7 @@
 import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { getState } from '../state'
-import { setLocale } from '../plugin'
+import { useI18nKitState } from '../state'
+import { setLocale as _setLocale } from '../plugin'
 import { extractMeta } from '../utils/localeEntry'
 import type { ComputedRef, Ref } from 'vue'
 
@@ -40,17 +40,17 @@ export function useLocale<
   TMeta extends Record<string, unknown> = Record<string, unknown>,
 >(): UseLocaleReturn<TMeta> {
   const { locale } = useI18n()
-  const { isLoading, options } = getState()
+  const state = useI18nKitState()
 
   const localeMeta = computed<TMeta | undefined>(() => {
-    const entry = options.locales[locale.value as string]
+    const entry = state.options.locales[locale.value as string]
     return entry ? (extractMeta(entry) as TMeta | undefined) : undefined
   })
 
   return {
     locale: locale as Ref<string>,
-    setLocale,
-    isLoading,
+    setLocale: (lang: string) => _setLocale(state, lang),
+    isLoading: state.isLoading,
     localeMeta,
   }
 }
