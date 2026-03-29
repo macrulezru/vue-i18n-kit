@@ -1,6 +1,7 @@
 import { runInit } from './commands/init.js'
 import { runAdd } from './commands/add.js'
 import { runCheck } from './commands/check.js'
+import { runAutoConfig } from './commands/auto-config.js'
 import { startUiServer } from '../ui-server/server.js'
 
 const VERSION = '0.1.0'
@@ -63,6 +64,11 @@ switch (command) {
     break
   }
 
+  case 'auto-config': {
+    runAutoConfig(process.cwd())
+    break
+  }
+
   case 'ui': {
     const flags = parseFlags(rest)
     const port = typeof flags['port'] === 'string' ? parseInt(flags['port'], 10) : 4173
@@ -80,6 +86,9 @@ switch (command) {
 vue-i18n-kit v${VERSION} — Locale file management CLI
 
 Commands:
+  auto-config                   Auto-discover locale files, generate i18n-tools/
+                                  data, and configure vueI18nMapPlugin in vite.config
+
   init [options]                Create locale JSON files with example structure
     --dir <path>                Locales directory       (default: src/locales)
     --locales <en,ru,de>        Comma-separated codes   (default: en)
@@ -98,6 +107,7 @@ Commands:
     --port <number>             Port to listen on       (default: 4173)
 
 Examples:
+  npx vue-i18n-kit auto-config
   npx vue-i18n-kit init --locales en,ru,de
   npx vue-i18n-kit add fr --from en --empty
   npx vue-i18n-kit check --default en --fail
