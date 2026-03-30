@@ -60,6 +60,27 @@ function parseSimpleObject(body: string): Record<string, unknown> {
   return result
 }
 
+// ── Import path resolution ────────────────────────────────────────────────────
+
+/**
+ * Resolves an import string to an absolute path, handling common project aliases:
+ *   `~/path`  — Nuxt root alias → cwd/path
+ *   `@/path`  — Vite alias → tries cwd/src/path first (standard convention),
+ *               then falls back to cwd/path (Nuxt-style)
+ *   `./path`  — relative to the source file's directory
+ */
+function resolveImportPath(cwd: string, fileDir: string, importStr: string): string {
+  if (importStr.startsWith('~/')) {
+    return resolve(cwd, importStr.slice(2))
+  }
+  if (importStr.startsWith('@/')) {
+    const rel = importStr.slice(2)
+    const withSrc = resolve(cwd, 'src', rel)
+    return existsSync(withSrc) ? withSrc : resolve(cwd, rel)
+  }
+  return resolve(fileDir, importStr)
+}
+
 // ── Locales block extraction ──────────────────────────────────────────────────
 
 /**
@@ -214,10 +235,7 @@ export function discoverLocales(cwd: string): DiscoveredLocale[] {
       // For computed keys the locale code is unknown at parse time — derive it from the filename
       const code = plainCode ?? importStr.split('/').pop()!.replace(/\.[^.]+$/, '')
 
-      // ~ and @ are Nuxt/project-root aliases → resolve relative to cwd
-      const absolutePath = (importStr.startsWith('~/') || importStr.startsWith('@/'))
-        ? resolve(cwd, importStr.slice(2))
-        : resolve(fileDir, importStr)
+      const absolutePath = resolveImportPath(cwd, fileDir, importStr)
 
       if (!existsSync(absolutePath)) {
         console.warn(`[vue-i18n-kit] Locale file not found: ${absolutePath} (locale: ${code})`)
