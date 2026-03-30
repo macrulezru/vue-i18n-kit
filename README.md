@@ -715,25 +715,57 @@ app.use(createVueI18nPlugin({
 
 `localStorage` calls are wrapped in `try/catch` so the plugin works without issues in environments where storage is restricted (private browsing, certain iframe contexts).
 
-> **Do not combine `persistLocale: true` with manual `localStorage` writes for the same locale key.** If you call `localStorage.setItem('vue3-i18n-locale', lang)` in a router guard in addition to having `persistLocale: true` in the plugin, you get two writers on the same key. The plugin will overwrite your value on the next `setLocale` call; your router guard will overwrite the plugin's value on the next navigation. Use one or the other:
->
-> - **`persistLocale: true`** — let the plugin handle everything; no extra code needed.
-> - **Manual storage** — leave `persistLocale` unset and manage `localStorage` yourself (e.g. to store more locale data alongside the code, or to use `sessionStorage`).
->
-> If you need to react to locale changes outside components (e.g. to update `<html lang>`), use [`service.onLocaleChange`](#onlocalechange) instead of watching `localStorage`.
+### `persistLocale` vs manual `localStorage`
+
+Two patterns exist for persisting the locale — choose one and stick to it. Mixing them creates two writers on the same key and leads to unpredictable restore order.
+
+| | `persistLocale: true` | Manual `localStorage` |
+|---|---|---|
+| **Setup** | One option in `createVueI18nPlugin` | Read on startup, write in `onLocaleChange` |
+| **Restore on page load** | Automatic | You read the key and pass the value as `defaultLocale` |
+| **Control** | Plugin-managed | Full control over key name, storage type, serialization |
+| **Good when** | You just need locale to survive a page reload | You store extra data alongside the locale, use `sessionStorage`, or share the key with other parts of the app |
+
+**Option A — let the plugin handle it (recommended for most projects):**
+
+```ts
+// main.ts — nothing else needed
+app.use(createVueI18nPlugin({
+  defaultLocale: 'en',
+  locales: { ... },
+  persistLocale: true,
+}))
+```
+
+**Option B — manage storage yourself:**
+
+```ts
+// main.ts — read persisted locale and pass it as defaultLocale
+const saved = localStorage.getItem('my-locale')
+const initial = ['en', 'ru'].includes(saved ?? '') ? saved! : 'en'
+
+app.use(i18nPlugin)   // persistLocale is NOT set
+
+// Write on every switch
+i18nPlugin.service.onLocaleChange((lang) => {
+  localStorage.setItem('my-locale', lang)
+})
+```
+
+> **Do not combine both options for the same storage key.** If `persistLocale: true` is set and you also call `localStorage.setItem` manually, the plugin will overwrite your value on the next `setLocale`, and your code will overwrite the plugin's value on the next navigation.
 
 ### Using a custom storage key
+
+When `persistLocale: true` is set, use `storageKey` to avoid conflicts when multiple apps share the same origin:
 
 ```ts
 app.use(createVueI18nPlugin({
   defaultLocale: 'en',
   locales: { en: enMessages, ru: ruMessages },
   persistLocale: true,
-  storageKey: 'my-app-locale',
+  storageKey: 'my-app-locale',   // default: 'vue3-i18n-locale'
 }))
 ```
-
-Setting a custom `storageKey` avoids conflicts when multiple apps share the same origin.
 
 ---
 
