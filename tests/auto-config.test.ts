@@ -272,6 +272,41 @@ describe('discoverLocales — external locales variable', () => {
   })
 })
 
+describe('discoverLocales — @/ alias resolution', () => {
+  it('resolves @/ to src/ when file exists there (standard Vite convention)', () => {
+    const cwd = setup({
+      'src/plugins/i18n.ts': `
+        export default createVueI18nPlugin({
+          locales: {
+            en: { messages: () => import('@/locales/en.json') },
+            ru: { messages: () => import('@/locales/ru.json') },
+          },
+        })
+      `,
+      'src/locales/en.json': '{}',
+      'src/locales/ru.json': '{}',
+    })
+    const locales = discoverLocales(cwd)
+    expect(locales.map(l => l.code)).toEqual(['en', 'ru'])
+    expect(locales[0].relativePath).toBe('src/locales/en.json')
+  })
+
+  it('falls back to cwd/ when @/ file is not under src/ (Nuxt-style)', () => {
+    const cwd = setup({
+      'src/i18n.ts': `
+        export default createVueI18nPlugin({
+          locales: {
+            en: { messages: () => import('@/locales/en.json') },
+          },
+        })
+      `,
+      'locales/en.json': '{}',
+    })
+    const locales = discoverLocales(cwd)
+    expect(locales[0].relativePath).toBe('locales/en.json')
+  })
+})
+
 describe('discoverLocales — plugin in separate file', () => {
   it('finds createVueI18nPlugin even when it is not in main.ts', () => {
     const cwd = setup({
