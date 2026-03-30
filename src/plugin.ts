@@ -1,12 +1,12 @@
-import { ref } from 'vue'
-import type { App, Plugin } from 'vue'
+import { ref, computed } from 'vue'
+import type { App, Ref } from 'vue'
 import { createI18nInstance } from './createI18n'
 import { I18N_KIT_KEY } from './state'
 import type { I18nKitState } from './state'
 import { loadLocale } from './utils/loadLocale'
 import { loadPersistedLocale, saveLocale } from './utils/persistLocale'
-import { extractMessages, isLocaleDefinition } from './utils/localeEntry'
-import type { I18nPluginOptions, LocaleMessages } from './types'
+import { extractMessages, extractMeta } from './utils/localeEntry'
+import type { I18nPluginOptions, LocaleMessages, I18nPlugin, I18nService, LocaleInfo } from './types'
 
 const DEFAULT_STORAGE_KEY = 'vue3-i18n-locale'
 
@@ -62,8 +62,41 @@ export async function setLocale(state: I18nKitState, lang: string): Promise<void
  *   persistLocale: true,
  * }))
  */
-export function createVueI18nPlugin(options: I18nPluginOptions): Plugin {
+export function createVueI18nPlugin<
+  TMeta extends Record<string, unknown> = Record<string, unknown>,
+>(options: I18nPluginOptions): I18nPlugin<TMeta> {
+  const NOT_INSTALLED =
+    '[vue-i18n-kit] Plugin is not installed yet. Call app.use(plugin) before using service.'
+
+  let installedState: I18nKitState | null = null
+
+  const service: I18nService<TMeta> = {
+    get locale() {
+      if (!installedState) throw new Error(NOT_INSTALLED)
+      return installedState.i18n.global.locale as Ref<string>
+    },
+    get isLoading() {
+      if (!installedState) throw new Error(NOT_INSTALLED)
+      return installedState.isLoading
+    },
+    setLocale(lang: string): Promise<void> {
+      if (!installedState) throw new Error(NOT_INSTALLED)
+      return setLocale(installedState, lang)
+    },
+    get availableLocales() {
+      if (!installedState) throw new Error(NOT_INSTALLED)
+      const state = installedState
+      return computed<LocaleInfo<TMeta>[]>(() =>
+        Object.entries(state.options.locales).map(([code, entry]) => ({
+          code,
+          meta: extractMeta(entry) as TMeta | undefined,
+        })),
+      )
+    },
+  }
+
   return {
+    service,
     install(app: App): void {
       const storageKey = options.storageKey ?? DEFAULT_STORAGE_KEY
 
@@ -99,6 +132,7 @@ export function createVueI18nPlugin(options: I18nPluginOptions): Plugin {
 
       // Provide per-app state — SSR-safe, no module-level singleton
       const state: I18nKitState = { i18n, options, isLoading, loadedLocales, storageKey }
+      installedState = state
       app.provide(I18N_KIT_KEY, state)
 
       app.use(i18n)

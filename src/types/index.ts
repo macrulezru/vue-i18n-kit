@@ -1,3 +1,5 @@
+import type { Ref, ComputedRef, Plugin } from 'vue'
+
 export type LocaleMessages = Record<string, unknown>
 export type LocaleLoader = () => Promise<LocaleMessages | { default: LocaleMessages }>
 
@@ -45,6 +47,36 @@ export interface LocaleInfo<TMeta extends Record<string, unknown> = Record<strin
   code: string
   /** Metadata attached via LocaleDefinition, or undefined if not provided */
   meta: TMeta | undefined
+}
+
+/**
+ * Service object returned by `createVueI18nPlugin`.
+ * Can be used outside of Vue component setup (router guards, Pinia stores, etc.).
+ *
+ * All properties throw if accessed before `app.use(plugin)`.
+ */
+export interface I18nService<TMeta extends Record<string, unknown> = Record<string, unknown>> {
+  /** Currently active locale ref — same instance as `useLocale().locale` */
+  readonly locale: Ref<string>
+  /** True while a locale file is being loaded */
+  readonly isLoading: Ref<boolean>
+  /** Switch the active locale (lazy-loads messages if needed) */
+  setLocale(lang: string): Promise<void>
+  /** All registered locales with their metadata */
+  readonly availableLocales: ComputedRef<LocaleInfo<TMeta>[]>
+}
+
+/**
+ * Return type of `createVueI18nPlugin`.
+ * Satisfies Vue's `Plugin` contract and exposes a `.service` property.
+ *
+ * @example
+ * const i18nPlugin = createVueI18nPlugin({ ... })
+ * app.use(i18nPlugin)                     // unchanged
+ * i18nPlugin.service.setLocale('en')      // usable anywhere
+ */
+export type I18nPlugin<TMeta extends Record<string, unknown> = Record<string, unknown>> = Plugin & {
+  readonly service: I18nService<TMeta>
 }
 
 export interface I18nPluginOptions {
