@@ -983,6 +983,20 @@ vue-i18n-kit ui [--port <number>]
 |---|---|---|
 | `--port <number>` | `4173` | Port for the local editor server. |
 
+### Running the editor without `auto-config`
+
+`auto-config` and `ui` are independent commands — the editor works fine without the auto-scan step. This is useful when `auto-config` cannot parse your locale setup (e.g. the locales object is imported from a separate file).
+
+**1.** Add `vueI18nMapPlugin` to your config manually using the same format shown in [What gets written to the project config](#what-gets-written-to-the-project-config) above.
+
+**2.** Run the editor directly — skip `auto-config` in the script:
+
+```json
+"i18n:ui": "vue-i18n-kit ui"
+```
+
+With a manually maintained config you are responsible for keeping `vueI18nMapPlugin` in sync when you add or rename locales. The recommended `auto-config && ui` combination does this automatically.
+
 ---
 
 ## Nuxt & SSR
