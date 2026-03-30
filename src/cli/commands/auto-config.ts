@@ -60,6 +60,54 @@ function parseSimpleObject(body: string): Record<string, unknown> {
   return result
 }
 
+// ── Locales block extraction ──────────────────────────────────────────────────
+
+/**
+ * Extracts the inner content of the `locales` object from the plugin call body.
+ *
+ * Handles three forms:
+ *   1. `locales: { en: ..., ru: ... }` — inline object
+ *   2. `locales: appLocales`            — reference to a variable in the same file
+ *   3. `{ locales }`                    — shorthand property (varName = 'locales')
+ *
+ * Returns the content between the outer braces, or `null` if not found.
+ */
+function extractLocalesBody(pluginBody: string, fileContent: string): string | null {
+  // ── Case 1: inline object ────────────────────────────────────────────────────
+  const inlineMatch = pluginBody.match(/\blocales\s*:\s*\{/)
+  if (inlineMatch && inlineMatch.index !== undefined) {
+    const braceIdx = pluginBody.indexOf('{', inlineMatch.index + inlineMatch[0].length - 1)
+    const closeIdx = findMatchingClose(pluginBody, braceIdx)
+    return closeIdx !== -1 ? pluginBody.slice(braceIdx + 1, closeIdx) : null
+  }
+
+  // ── Determine variable name ──────────────────────────────────────────────────
+  // Case 2: explicit reference  →  locales: varName
+  const explicitRef = pluginBody.match(/\blocales\s*:\s*([a-zA-Z_$][\w$]*)/)
+  const varName = explicitRef
+    ? explicitRef[1]
+    // Case 3: shorthand  →  { ..., locales }  (no colon follows)
+    : /(?:^|[{,\n])\s*\blocales\b(?!\s*:)/.test(pluginBody) ? 'locales' : null
+
+  if (!varName) return null
+
+  // ── Find declaration in the file ─────────────────────────────────────────────
+  // Matches:  const varName = {
+  //           const varName: SomeType = {
+  //           export const varName = {
+  const escapedName = varName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  const declRE = new RegExp(
+    `(?:export\\s+)?(?:const|let|var)\\s+${escapedName}[^=]*=\\s*\\{`,
+  )
+  const declMatch = fileContent.match(declRE)
+  if (!declMatch || declMatch.index === undefined) return null
+
+  const braceStart = fileContent.indexOf('{', declMatch.index + declMatch[0].length - 1)
+  if (braceStart === -1) return null
+  const braceEnd = findMatchingClose(fileContent, braceStart)
+  return braceEnd !== -1 ? fileContent.slice(braceStart + 1, braceEnd) : null
+}
+
 // ── Source of truth: createVueI18nPlugin config ───────────────────────────────
 
 export interface DiscoveredLocale {
@@ -73,12 +121,15 @@ export interface DiscoveredLocale {
 }
 
 /**
- * Extracts the raw value text for a given locale code from the locales block.
- * Handles both `code: { ... }` (object) and `code: () => import(...)` (function).
+ * Extracts the raw value text for a given locale key from the locales block.
+ * Handles both `code: { ... }` and `[Expr]: { ... }` (computed property) forms,
+ * as well as `code: () => import(...)` function values.
  */
-function getLocaleValueText(localesBody: string, localeCode: string): string | undefined {
-  const codeRE = new RegExp(`(?:['"]?)${localeCode}(?:['"]?)\\s*:\\s*`)
-  const codeMatch = localesBody.match(codeRE)
+function getLocaleValueText(localesBody: string, localeCode: string, isComputed = false): string | undefined {
+  const pattern = isComputed
+    ? `\\[${localeCode.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\]\\s*:\\s*`
+    : `(?:['"]?)${localeCode}(?:['"]?)\\s*:\\s*`
+  const codeMatch = localesBody.match(new RegExp(pattern))
   if (!codeMatch || codeMatch.index === undefined) return undefined
 
   const start = codeMatch.index + codeMatch[0].length
@@ -134,25 +185,24 @@ export function discoverLocales(cwd: string): DiscoveredLocale[] {
 
     const pluginBody = content.slice(pluginOpenIdx + 1, pluginCloseIdx)
 
-    // ── Find locales: { ... } ────────────────────────────────────────────────
-    const localesMatch = pluginBody.match(/\blocales\s*:\s*\{/)
-    if (!localesMatch || localesMatch.index === undefined) continue
-
-    const localesBraceIdx = pluginBody.indexOf('{', localesMatch.index + localesMatch[0].length - 1)
-    const localesCloseIdx = findMatchingClose(pluginBody, localesBraceIdx)
-    if (localesCloseIdx === -1) continue
-
-    const localesBody = pluginBody.slice(localesBraceIdx + 1, localesCloseIdx)
+    // ── Extract the locales object body (inline, external var, or shorthand) ──
+    const localesBody = extractLocalesBody(pluginBody, content)
+    if (!localesBody) continue
     const fileDir = dirname(file)
 
     // ── Collect all locale codes ─────────────────────────────────────────────
-    const codeRE = /(?:^|,|\n)\s*(?:['"]?)([a-z]{2,3}(?:-[A-Za-z]{2,4})?)(?:['"]?)\s*:/gm
+    // Matches plain string keys ('en', ru) AND computed keys ([LocalesEnum.EN])
+    const codeRE = /(?:^|,|\n)\s*(?:\[([^\]\n]+)\]|(?:['"]?)([a-z]{2,3}(?:-[A-Za-z]{2,4})?)(?:['"]?))\s*:/gm
     const results: DiscoveredLocale[] = []
     let m: RegExpExecArray | null
 
     while ((m = codeRE.exec(localesBody)) !== null) {
-      const code = m[1]
-      const valueText = getLocaleValueText(localesBody, code)
+      const computedExpr = m[1]  // e.g. 'LocalesEnum.EN' — present for [Expr]: keys
+      const plainCode   = m[2]  // e.g. 'en'             — present for plain string keys
+
+      const valueText = computedExpr
+        ? getLocaleValueText(localesBody, computedExpr, true)
+        : getLocaleValueText(localesBody, plainCode)
       if (!valueText) continue
 
       // Extract import path: import('./locales/en.json') or import('~/locales/en.json')
@@ -160,6 +210,10 @@ export function discoverLocales(cwd: string): DiscoveredLocale[] {
       if (!importMatch) continue // inline messages object — no file, skip
 
       const importStr = importMatch[2]
+
+      // For computed keys the locale code is unknown at parse time — derive it from the filename
+      const code = plainCode ?? importStr.split('/').pop()!.replace(/\.[^.]+$/, '')
+
       // ~ and @ are Nuxt/project-root aliases → resolve relative to cwd
       const absolutePath = (importStr.startsWith('~/') || importStr.startsWith('@/'))
         ? resolve(cwd, importStr.slice(2))
@@ -440,11 +494,75 @@ export function runAutoConfig(cwd: string): void {
   const locales = discoverLocales(cwd)
 
   if (locales.length === 0) {
-    console.error(
-      '[vue-i18n-kit] Could not find createVueI18nPlugin(...) with locale file imports.\n' +
-      '  Make sure your app calls app.use(createVueI18nPlugin({ locales: { ... } }))\n' +
-      '  with at least one locale using a lazy loader: () => import(\'./locales/en.json\')',
-    )
+    console.error(`
+[vue-i18n-kit] auto-config: could not find locale definitions.
+
+The scanner looks for createVueI18nPlugin({ locales: ... }) in your source files
+and supports the following patterns:
+
+  ✔  Inline object
+       createVueI18nPlugin({
+         locales: {
+           en: { messages: () => import('./locales/en.json') },
+           ru: () => import('./locales/ru.json'),
+         },
+       })
+
+  ✔  Computed / enum keys
+       locales: {
+         [LocalesEnum.EN]: { messages: () => import('./locales/en.json') },
+       }
+
+  ✔  External variable declared in the same file
+       const locales = { en: { messages: () => import('./locales/en.json') } }
+       createVueI18nPlugin({ locales })          // shorthand
+       createVueI18nPlugin({ locales: locales })  // explicit
+
+The following patterns are NOT supported and must be configured manually:
+
+  ✘  Locales object imported from another file
+       import { locales } from './locales.config'
+       createVueI18nPlugin({ locales })
+
+  ✘  Dynamic import() paths (template literals or computed strings)
+       en: () => import(\`./locales/\${code}.json\`)
+
+  ✘  Locales built at runtime (Object.fromEntries, Array.reduce, etc.)
+
+For unsupported cases, add vueI18nMapPlugin manually and run  vue-i18n-kit ui
+directly (without auto-config). Examples:
+
+  vite.config.ts (Vue / Vite):
+    import { vueI18nMapPlugin } from 'vue-i18n-kit/vite'
+
+    export default defineConfig({
+      plugins: [
+        vue(),
+        vueI18nMapPlugin({
+          locales: {
+            en: { path: 'src/locales/en.json', meta: { display: 'English' } },
+            ru: { path: 'src/locales/ru.json', meta: { display: 'Русский' } },
+          },
+        }),
+      ],
+    })
+
+  nuxt.config.ts (Nuxt):
+    import { vueI18nMapPlugin } from 'vue-i18n-kit/vite'
+
+    export default defineNuxtConfig({
+      vite: {
+        plugins: [
+          vueI18nMapPlugin({
+            locales: {
+              en: { path: 'locales/en.json', meta: { display: 'English' } },
+              ru: { path: 'locales/ru.json', meta: { display: 'Русский' } },
+            },
+          }),
+        ],
+      },
+    })
+`)
     process.exit(1)
   }
 
