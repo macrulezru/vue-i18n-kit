@@ -1,5 +1,5 @@
 import { ref, computed } from 'vue'
-import type { App, Ref } from 'vue'
+import type { App, Ref, ComputedRef } from 'vue'
 import { createI18nInstance } from './createI18n'
 import { I18N_KIT_KEY } from './state'
 import type { I18nKitState } from './state'
@@ -73,7 +73,7 @@ export function createVueI18nPlugin<
     '[vue-i18n-kit] Plugin is not installed yet. Call app.use(plugin) before using service.'
 
   let installedState: I18nKitState | null = null
-  let availableLocalesComputed: ReturnType<typeof computed<LocaleInfo<TMeta>[]>> | null = null
+  let availableLocalesComputed: ComputedRef<LocaleInfo<TMeta>[]> | null = null
 
   const service: I18nService<TMeta> = {
     get locale() {
