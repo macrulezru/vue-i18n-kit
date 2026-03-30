@@ -126,6 +126,60 @@ describe('createVueI18nPlugin — service', () => {
     const { i18n } = getState(app)
     expect(plugin.service.locale).toBe(i18n.global.locale)
   })
+
+  it('service.availableLocales returns the same computed instance on every access', () => {
+    const plugin = createVueI18nPlugin(defaultOptions)
+    const app = createApp({ render: () => h('div') })
+    app.use(plugin)
+    expect(plugin.service.availableLocales).toBe(plugin.service.availableLocales)
+  })
+
+  it('service.onLocaleChange throws before install', () => {
+    const plugin = createVueI18nPlugin(defaultOptions)
+    expect(() => plugin.service.onLocaleChange(() => {})).toThrow('[vue-i18n-kit]')
+  })
+
+  it('service.onLocaleChange is called after setLocale', async () => {
+    const plugin = createVueI18nPlugin(defaultOptions)
+    const app = createApp({ render: () => h('div') })
+    app.use(plugin)
+
+    const calls: string[] = []
+    plugin.service.onLocaleChange((lang) => calls.push(lang))
+
+    await plugin.service.setLocale('en')
+    expect(calls).toEqual(['en'])
+  })
+
+  it('service.onLocaleChange unsubscribe stops future calls', async () => {
+    const plugin = createVueI18nPlugin(defaultOptions)
+    const app = createApp({ render: () => h('div') })
+    app.use(plugin)
+
+    const calls: string[] = []
+    const unsubscribe = plugin.service.onLocaleChange((lang) => calls.push(lang))
+
+    await plugin.service.setLocale('en')
+    unsubscribe()
+    await plugin.service.setLocale('ru')
+
+    expect(calls).toEqual(['en'])
+  })
+
+  it('service.onLocaleChange supports multiple subscribers', async () => {
+    const plugin = createVueI18nPlugin(defaultOptions)
+    const app = createApp({ render: () => h('div') })
+    app.use(plugin)
+
+    const calls1: string[] = []
+    const calls2: string[] = []
+    plugin.service.onLocaleChange((lang) => calls1.push(lang))
+    plugin.service.onLocaleChange((lang) => calls2.push(lang))
+
+    await plugin.service.setLocale('en')
+    expect(calls1).toEqual(['en'])
+    expect(calls2).toEqual(['en'])
+  })
 })
 
 describe('createVueI18nPlugin — persistLocale', () => {

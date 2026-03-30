@@ -40,6 +40,10 @@ export async function setLocale(state: I18nKitState, lang: string): Promise<void
     if (options.persistLocale) {
       saveLocale(storageKey, lang)
     }
+
+    for (const cb of state.localeChangeCallbacks) {
+      cb(lang)
+    }
   } finally {
     isLoading.value = false
   }
@@ -69,6 +73,7 @@ export function createVueI18nPlugin<
     '[vue-i18n-kit] Plugin is not installed yet. Call app.use(plugin) before using service.'
 
   let installedState: I18nKitState | null = null
+  let availableLocalesComputed: ReturnType<typeof computed<LocaleInfo<TMeta>[]>> | null = null
 
   const service: I18nService<TMeta> = {
     get locale() {
@@ -84,14 +89,13 @@ export function createVueI18nPlugin<
       return setLocale(installedState, lang)
     },
     get availableLocales() {
+      if (!installedState || !availableLocalesComputed) throw new Error(NOT_INSTALLED)
+      return availableLocalesComputed
+    },
+    onLocaleChange(callback: (lang: string) => void): () => void {
       if (!installedState) throw new Error(NOT_INSTALLED)
-      const state = installedState
-      return computed<LocaleInfo<TMeta>[]>(() =>
-        Object.entries(state.options.locales).map(([code, entry]) => ({
-          code,
-          meta: extractMeta(entry) as TMeta | undefined,
-        })),
-      )
+      installedState.localeChangeCallbacks.add(callback)
+      return () => installedState?.localeChangeCallbacks.delete(callback)
     },
   }
 
@@ -131,8 +135,15 @@ export function createVueI18nPlugin<
       const i18n = createI18nInstance(options, initialMessages, requestedLocale)
 
       // Provide per-app state — SSR-safe, no module-level singleton
-      const state: I18nKitState = { i18n, options, isLoading, loadedLocales, storageKey }
+      const localeChangeCallbacks = new Set<(lang: string) => void>()
+      const state: I18nKitState = { i18n, options, isLoading, loadedLocales, storageKey, localeChangeCallbacks }
       installedState = state
+      availableLocalesComputed = computed<LocaleInfo<TMeta>[]>(() =>
+        Object.entries(options.locales).map(([code, entry]) => ({
+          code,
+          meta: extractMeta(entry) as TMeta | undefined,
+        })),
+      )
       app.provide(I18N_KIT_KEY, state)
 
       app.use(i18n)

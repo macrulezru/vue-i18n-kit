@@ -12,6 +12,8 @@ A reusable Vue 3 localization plugin that wraps [`vue-i18n`](https://vue-i18n.in
 - **Fallback locale** — missing translation keys transparently fall back to the configured fallback language
 - **Locale metadata** — attach any custom data to a locale (`display`, `flag`, `author`, …) and read it back through `useLocale` and `useAvailableLocales`
 - **Date / number / currency formatting** — `useFormat` wraps `Intl` and always uses the active locale
+- **Plugin service** — `createVueI18nPlugin` returns an `I18nPlugin` with a `.service` property — fully usable outside Vue components (router guards, Pinia stores, SSR entry points)
+- **Locale change hook** — `service.onLocaleChange(cb)` fires after every successful locale switch; returns an unsubscribe function
 - **TypeScript-first** — all public APIs are fully typed, no `any` leaks into consumer code
 - **Vite plugin** — checks all locale files for missing or extra keys at build time (import from `vue-i18n-kit/vite`)
 - **CLI** — `vue-i18n-kit init / add / check` scaffolds and audits locale files from the terminal
@@ -496,6 +498,114 @@ pluralCategory(5)   // 'many'
 
 ---
 
+## Plugin Service
+
+`createVueI18nPlugin` returns an `I18nPlugin` object — it satisfies Vue's `Plugin` interface (so `app.use(plugin)` works unchanged) and exposes a `.service` property that is usable **anywhere in the application**, including outside Vue component `setup()`.
+
+```ts
+import { createVueI18nPlugin } from 'vue-i18n-kit'
+
+export const i18nPlugin = createVueI18nPlugin({
+  defaultLocale: 'en',
+  locales: {
+    en: { messages: () => import('./locales/en.json'), meta: { display: 'English' } },
+    ru: { messages: () => import('./locales/ru.json'), meta: { display: 'Русский' } },
+  },
+})
+```
+
+```ts
+// main.ts
+app.use(i18nPlugin)   // install as before
+```
+
+```ts
+// router/index.ts — outside setup()
+import { i18nPlugin } from '@/i18n'
+
+router.beforeEach(async (to) => {
+  const lang = to.params.lang as string
+  if (lang) await i18nPlugin.service.setLocale(lang)
+})
+```
+
+### `service` API
+
+| Property | Type | Description |
+|---|---|---|
+| `locale` | `Ref<string>` | Currently active locale — the same ref instance as `useLocale().locale`. |
+| `isLoading` | `Ref<boolean>` | `true` while a locale file is being fetched. |
+| `setLocale` | `(lang: string) => Promise<void>` | Switch locale. Lazy-loads if needed. Throws if `lang` is not registered. |
+| `availableLocales` | `ComputedRef<LocaleInfo[]>` | All registered locales with their metadata. Same computed instance on every access. |
+| `onLocaleChange` | `(cb: (lang: string) => void) => () => void` | Subscribe to locale switches. Returns an unsubscribe function. |
+
+All properties throw a descriptive error if accessed before `app.use(plugin)`:
+
+```
+[vue-i18n-kit] Plugin is not installed yet. Call app.use(plugin) before using service.
+```
+
+### `onLocaleChange`
+
+Subscribe to locale switches from anywhere — useful for syncing external state that cannot be driven by Vue reactivity.
+
+```ts
+// Update <html lang> on every switch
+i18nPlugin.service.onLocaleChange((lang) => {
+  document.documentElement.lang = lang
+})
+
+// Unsubscribe when no longer needed
+const unsubscribe = i18nPlugin.service.onLocaleChange((lang) => {
+  analytics.track('locale_changed', { lang })
+})
+// later:
+unsubscribe()
+```
+
+Multiple subscribers are supported. Each call to `onLocaleChange` registers an independent callback; all are called in registration order after every successful `setLocale`.
+
+### `service` vs composables — when to use which
+
+Both APIs control the same underlying locale state. Choose based on **where** the code runs:
+
+| Context | Recommended API |
+|---|---|
+| Vue component `setup()` | `useLocale()`, `useT()`, `useAvailableLocales()` — reactive, template-friendly |
+| Router guards, Pinia stores, utility modules | `plugin.service` — no `getCurrentInstance()` needed |
+| SSR entry points, server middleware | `plugin.service` — inject the plugin instance from your plugin file |
+
+There is no functional difference between `useLocale().setLocale('en')` and `plugin.service.setLocale('en')` — both mutate the same ref and trigger the same reactivity. The composables are simply the ergonomic wrapper for component scope.
+
+> **Do not mix both APIs to manage the same locale switch.** Calling `useLocale().setLocale()` in a component and also `service.setLocale()` in a router guard for the same navigation event will trigger two back-to-back locale loads. Pick one callsite per action.
+
+### SSR note
+
+`service` stores state in a closure created when `createVueI18nPlugin` is called. In SSR this means the plugin **must be created per request**, not at module level:
+
+```ts
+// ✅ Correct — one plugin instance per Nuxt request
+export default defineNuxtPlugin((nuxtApp) => {
+  const plugin = createVueI18nPlugin({ ... })
+  nuxtApp.vueApp.use(plugin)
+  // plugin.service is safe to use here — scoped to this request
+})
+```
+
+```ts
+// ❌ Wrong — shared across all SSR requests
+const plugin = createVueI18nPlugin({ ... })   // module level
+
+export default defineNuxtPlugin((nuxtApp) => {
+  nuxtApp.vueApp.use(plugin)
+  // plugin.service.locale is shared — requests will contaminate each other
+})
+```
+
+For client-only Vue apps (SPA) this distinction does not apply — the module executes once per page load.
+
+---
+
 ## TypeScript
 
 All public types are re-exported for use in consumer projects:
@@ -504,6 +614,8 @@ All public types are re-exported for use in consumer projects:
 import type {
   // Plugin
   I18nPluginOptions,
+  I18nPlugin,               // return type of createVueI18nPlugin — Plugin & { service }
+  I18nService,              // { locale, isLoading, setLocale, availableLocales, onLocaleChange }
 
   // Locale entry types
   LocaleMessages,           // Record<string, unknown>
@@ -602,6 +714,26 @@ app.use(createVueI18nPlugin({
 ```
 
 `localStorage` calls are wrapped in `try/catch` so the plugin works without issues in environments where storage is restricted (private browsing, certain iframe contexts).
+
+> **Do not combine `persistLocale: true` with manual `localStorage` writes for the same locale key.** If you call `localStorage.setItem('vue3-i18n-locale', lang)` in a router guard in addition to having `persistLocale: true` in the plugin, you get two writers on the same key. The plugin will overwrite your value on the next `setLocale` call; your router guard will overwrite the plugin's value on the next navigation. Use one or the other:
+>
+> - **`persistLocale: true`** — let the plugin handle everything; no extra code needed.
+> - **Manual storage** — leave `persistLocale` unset and manage `localStorage` yourself (e.g. to store more locale data alongside the code, or to use `sessionStorage`).
+>
+> If you need to react to locale changes outside components (e.g. to update `<html lang>`), use [`service.onLocaleChange`](#onlocalechange) instead of watching `localStorage`.
+
+### Using a custom storage key
+
+```ts
+app.use(createVueI18nPlugin({
+  defaultLocale: 'en',
+  locales: { en: enMessages, ru: ruMessages },
+  persistLocale: true,
+  storageKey: 'my-app-locale',
+}))
+```
+
+Setting a custom `storageKey` avoids conflicts when multiple apps share the same origin.
 
 ---
 
@@ -901,6 +1033,7 @@ export default defineNuxtPlugin((nuxtApp) => {
 - **`persistLocale`** — works on the client only; on the server it is silently ignored (no `localStorage`). It is safe to leave `persistLocale: true` in a Nuxt app — the plugin handles the missing global.
 - **Hydration** — the server and client render with the same `defaultLocale` (or the detected one). If you use `persistLocale`, the client will restore the user's saved locale after hydration.
 - **Vite plugin and CLI** — work the same way in Nuxt projects. Add `vueI18nMapPlugin` to `nuxt.config.ts` under `vite.plugins`.
+- **`plugin.service` in Nuxt** — create the plugin inside `defineNuxtPlugin` (not at module level) so each SSR request gets its own `service` instance. See [SSR note](#ssr-note) in the Plugin Service section.
 
 ---
 
@@ -997,7 +1130,7 @@ Tests are written with [Vitest](https://vitest.dev/) and [`@vue/test-utils`](htt
 
 | Test file | What is covered |
 |---|---|
-| `tests/plugin.test.ts` | Plugin installation, initial locale, lazy pre-loading, `persistLocale` restore logic |
+| `tests/plugin.test.ts` | Plugin installation, initial locale, lazy pre-loading, `persistLocale` restore logic, `service` property (pre-install guards, post-install refs, `onLocaleChange` subscribe/unsubscribe) |
 | `tests/useLocale.test.ts` | `locale` ref, `setLocale`, `isLoading` flag, lazy caching, error handling, `localeMeta` |
 | `tests/useT.test.ts` | `t()` key lookup and interpolation; `tm()` ICU pluralization via key and direct template |
 | `tests/useFormat.test.ts` | `formatDate`, `formatNumber`, `formatCurrency`, locale reactivity |

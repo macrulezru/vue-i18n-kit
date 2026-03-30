@@ -11,6 +11,8 @@ export interface I18nKitState {
   isLoading: Ref<boolean>
   loadedLocales: Set<string>
   storageKey: string
+  /** Subscribers notified after every successful locale switch */
+  localeChangeCallbacks: Set<(lang: string) => void>
 }
 
 export const I18N_KIT_KEY: InjectionKey<I18nKitState> = Symbol('vue-i18n-kit')

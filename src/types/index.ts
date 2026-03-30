@@ -64,6 +64,17 @@ export interface I18nService<TMeta extends Record<string, unknown> = Record<stri
   setLocale(lang: string): Promise<void>
   /** All registered locales with their metadata */
   readonly availableLocales: ComputedRef<LocaleInfo<TMeta>[]>
+  /**
+   * Subscribe to locale changes. Called after every successful `setLocale`.
+   * Returns an unsubscribe function.
+   *
+   * @example
+   * // Update <html lang> on every switch
+   * i18nPlugin.service.onLocaleChange((lang) => {
+   *   document.documentElement.lang = lang
+   * })
+   */
+  onLocaleChange(callback: (lang: string) => void): () => void
 }
 
 /**
