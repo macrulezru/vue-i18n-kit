@@ -9,7 +9,7 @@ export { useFormat } from './composables/useFormat'
 export { usePluralize } from './composables/usePluralize'
 
 // Types
-export type { I18nPluginOptions, LocaleMessages, LocaleEntry, LocaleDefinition, LocaleInfo } from './types'
+export type { I18nPluginOptions, LocaleMessages, LocaleEntry, LocaleDefinition, LocaleInfo, I18nService, I18nPlugin } from './types'
 export type { UseLocaleReturn } from './composables/useLocale'
 export type { UseTReturn } from './composables/useT'
 export type { UseAvailableLocalesReturn } from './composables/useAvailableLocales'
