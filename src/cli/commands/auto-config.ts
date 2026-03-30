@@ -155,12 +155,15 @@ export function discoverLocales(cwd: string): DiscoveredLocale[] {
       const valueText = getLocaleValueText(localesBody, code)
       if (!valueText) continue
 
-      // Extract import path: import('./locales/en.json')
+      // Extract import path: import('./locales/en.json') or import('~/locales/en.json')
       const importMatch = valueText.match(/import\s*\(\s*(['"`])([^'"`\n]+)\1\s*\)/)
       if (!importMatch) continue // inline messages object — no file, skip
 
       const importStr = importMatch[2]
-      const absolutePath = resolve(fileDir, importStr)
+      // ~ and @ are Nuxt/project-root aliases → resolve relative to cwd
+      const absolutePath = (importStr.startsWith('~/') || importStr.startsWith('@/'))
+        ? resolve(cwd, importStr.slice(2))
+        : resolve(fileDir, importStr)
 
       if (!existsSync(absolutePath)) {
         console.warn(`[vue-i18n-kit] Locale file not found: ${absolutePath} (locale: ${code})`)
@@ -233,82 +236,150 @@ function generateEntriesMap(cwd: string, output: string): void {
   writeFileSync(outPath, JSON.stringify(map, null, 2) + '\n', 'utf-8')
 }
 
-// ── vite.config modification ──────────────────────────────────────────────────
+// ── Config file detection ─────────────────────────────────────────────────────
+
+type ConfigKind = 'vite' | 'nuxt'
 
 const VITE_CONFIG_NAMES = [
   'vite.config.ts', 'vite.config.js', 'vite.config.mts', 'vite.config.mjs',
 ]
+const NUXT_CONFIG_NAMES = [
+  'nuxt.config.ts', 'nuxt.config.js', 'nuxt.config.mts', 'nuxt.config.mjs',
+]
 
-function findViteConfig(cwd: string): string | null {
+function findProjectConfig(cwd: string): { path: string; kind: ConfigKind } | null {
   for (const name of VITE_CONFIG_NAMES) {
     const p = join(cwd, name)
-    if (existsSync(p)) return p
+    if (existsSync(p)) return { path: p, kind: 'vite' }
+  }
+  for (const name of NUXT_CONFIG_NAMES) {
+    const p = join(cwd, name)
+    if (existsSync(p)) return { path: p, kind: 'nuxt' }
   }
   return null
 }
 
-function buildPluginCall(locales: DiscoveredLocale[]): string {
+/**
+ * Builds the `vueI18nMapPlugin({...})` call string.
+ * `outerIndent` — the spaces prepended to the first line (and used for the closing paren).
+ */
+function buildPluginCall(locales: DiscoveredLocale[], outerIndent = '    '): string {
+  const i1 = outerIndent + '  '   // locales: key
+  const i2 = outerIndent + '    ' // locale entries
   const entries = locales.map(l => {
     const metaPart = l.meta && Object.keys(l.meta).length > 0
       ? `, meta: ${serializeMeta(l.meta)}`
       : ''
-    return `        ${l.code}: { path: '${l.relativePath}'${metaPart} },`
+    return `${i2}${l.code}: { path: '${l.relativePath}'${metaPart} },`
   }).join('\n')
-  return `vueI18nMapPlugin({\n      locales: {\n${entries}\n      },\n    })`
+  return `vueI18nMapPlugin({\n${i1}locales: {\n${entries}\n${i1}},\n${outerIndent}})`
 }
 
-export function updateViteConfig(configPath: string, locales: DiscoveredLocale[]): void {
+/** Adds the import line after the last existing import in the file. */
+function addImport(content: string): string {
+  const importMatches = [...content.matchAll(/^import .+$/gm)]
+  if (importMatches.length > 0) {
+    const last = importMatches[importMatches.length - 1]
+    const insertAt = last.index! + last[0].length
+    return (
+      content.slice(0, insertAt) +
+      "\nimport { vueI18nMapPlugin } from 'vue-i18n-kit/vite'" +
+      content.slice(insertAt)
+    )
+  }
+  return "import { vueI18nMapPlugin } from 'vue-i18n-kit/vite'\n\n" + content
+}
+
+/** Inserts `pluginCall` before the closing `]` of the plugins array. */
+function insertAtEndOfPluginsArray(content: string, pluginsMatch: RegExpMatchArray, outerIndent: string, locales: DiscoveredLocale[]): string {
+  const bracketIdx = pluginsMatch.index! + pluginsMatch[0].length - 1
+  const closeBracketIdx = findMatchingClose(content, bracketIdx)
+  if (closeBracketIdx === -1) return content
+
+  const pluginCall = buildPluginCall(locales, outerIndent)
+  let insertPos = closeBracketIdx
+  while (insertPos > 0 && content[insertPos - 1] !== '\n') insertPos--
+  return content.slice(0, insertPos) + outerIndent + pluginCall + ',\n' + content.slice(insertPos)
+}
+
+export function updateConfig(configPath: string, kind: ConfigKind, locales: DiscoveredLocale[]): void {
   let content = readFileSync(configPath, 'utf-8')
-  const pluginCall = buildPluginCall(locales)
+
   const hasImport = content.includes("from 'vue-i18n-kit/vite'")
     || content.includes('from "vue-i18n-kit/vite"')
 
+  // ── Plugin already present — replace the entire call (same for both kinds) ──
   const pluginCallIdx = content.indexOf('vueI18nMapPlugin(')
-
   if (pluginCallIdx !== -1) {
-    // Plugin already present — replace the entire call
     const openParenIdx = pluginCallIdx + 'vueI18nMapPlugin'.length
     const closeIdx = findMatchingClose(content, openParenIdx)
     if (closeIdx === -1) {
-      console.warn('[vue-i18n-kit] Could not parse vueI18nMapPlugin call — skipping vite config update')
+      console.warn('[vue-i18n-kit] Could not parse vueI18nMapPlugin call — skipping config update')
       return
     }
+    // Detect current indentation from the line containing the call
+    let lineStart = pluginCallIdx
+    while (lineStart > 0 && content[lineStart - 1] !== '\n') lineStart--
+    const currentIndent = content.slice(lineStart, pluginCallIdx)
+    const pluginCall = buildPluginCall(locales, currentIndent)
     content = content.slice(0, pluginCallIdx) + pluginCall + content.slice(closeIdx + 1)
-  } else {
-    // Plugin absent — add import + insert into plugins: [
-    if (!hasImport) {
-      const importMatches = [...content.matchAll(/^import .+$/gm)]
-      if (importMatches.length > 0) {
-        const last = importMatches[importMatches.length - 1]
-        const insertAt = last.index! + last[0].length
-        content =
-          content.slice(0, insertAt) +
-          "\nimport { vueI18nMapPlugin } from 'vue-i18n-kit/vite'" +
-          content.slice(insertAt)
-      } else {
-        content = "import { vueI18nMapPlugin } from 'vue-i18n-kit/vite'\n\n" + content
-      }
-    }
+    writeFileSync(configPath, content, 'utf-8')
+    return
+  }
 
+  // ── Plugin absent — add import first ─────────────────────────────────────────
+  if (!hasImport) content = addImport(content)
+
+  if (kind === 'vite') {
+    // vite.config.ts — plugins: [ ... ] at top level
     const pluginsMatch = content.match(/plugins\s*:\s*\[/)
     if (!pluginsMatch || pluginsMatch.index === undefined) {
-      console.warn('[vue-i18n-kit] Could not find plugins: [ in vite config — skipping auto-insert')
-      printManualInstructions(locales)
+      console.warn('[vue-i18n-kit] Could not find plugins: [ — skipping auto-insert')
+      printManualInstructions(kind, locales)
       return
     }
+    content = insertAtEndOfPluginsArray(content, pluginsMatch, '    ', locales)
 
-    const bracketIdx = pluginsMatch.index + pluginsMatch[0].length - 1 // points to '['
-    const closeBracketIdx = findMatchingClose(content, bracketIdx)
-    if (closeBracketIdx === -1) {
-      console.warn('[vue-i18n-kit] Could not find closing ] of plugins array — skipping auto-insert')
-      printManualInstructions(locales)
-      return
+  } else {
+    // nuxt.config.ts — vite: { plugins: [ ... ] }
+
+    const pluginsMatch = content.match(/plugins\s*:\s*\[/)
+    if (pluginsMatch) {
+      // vite.plugins already exists — insert at end
+      content = insertAtEndOfPluginsArray(content, pluginsMatch, '      ', locales)
+
+    } else {
+      const viteMatch = content.match(/\bvite\s*:\s*\{/)
+      if (viteMatch && viteMatch.index !== undefined) {
+        // vite: {} exists but has no plugins — add plugins inside it
+        const viteBraceIdx = content.indexOf('{', viteMatch.index + viteMatch[0].length - 1)
+        const viteCloseIdx = findMatchingClose(content, viteBraceIdx)
+        if (viteCloseIdx === -1) {
+          printManualInstructions(kind, locales)
+          return
+        }
+        const pluginCall = buildPluginCall(locales, '      ')
+        const pluginsBlock = `\n    plugins: [\n      ${pluginCall},\n    ],\n  `
+        content = content.slice(0, viteCloseIdx) + pluginsBlock + content.slice(viteCloseIdx)
+
+      } else {
+        // No vite: section at all — add it inside defineNuxtConfig({...})
+        const nuxtConfigMatch = content.match(/defineNuxtConfig\s*\(/)
+        if (!nuxtConfigMatch || nuxtConfigMatch.index === undefined) {
+          printManualInstructions(kind, locales)
+          return
+        }
+        const nuxtOpenIdx = content.indexOf('(', nuxtConfigMatch.index + nuxtConfigMatch[0].length - 1)
+        const nuxtInnerIdx = content.indexOf('{', nuxtOpenIdx)
+        if (nuxtInnerIdx === -1) {
+          printManualInstructions(kind, locales)
+          return
+        }
+        const pluginCall = buildPluginCall(locales, '      ')
+        const viteBlock = `\n  vite: {\n    plugins: [\n      ${pluginCall},\n    ],\n  },`
+        content = content.slice(0, nuxtInnerIdx + 1) + viteBlock + content.slice(nuxtInnerIdx + 1)
+      }
     }
-
-    // Find the start of the line that contains the closing ] and insert before it
-    let insertPos = closeBracketIdx
-    while (insertPos > 0 && content[insertPos - 1] !== '\n') insertPos--
-    content = content.slice(0, insertPos) + '    ' + pluginCall + ',\n' + content.slice(insertPos)
   }
 
   writeFileSync(configPath, content, 'utf-8')
@@ -316,14 +387,34 @@ export function updateViteConfig(configPath: string, locales: DiscoveredLocale[]
 
 // ── Console instructions fallback ─────────────────────────────────────────────
 
-function printManualInstructions(locales: DiscoveredLocale[]): void {
+function printManualInstructions(kind: ConfigKind, locales: DiscoveredLocale[]): void {
   const entries = locales.map(l => {
     const metaPart = l.meta && Object.keys(l.meta).length > 0
       ? `, meta: ${serializeMeta(l.meta)}`
       : ''
     return `      ${l.code}: { path: '${l.relativePath}'${metaPart} },`
   }).join('\n')
-  console.log(`
+
+  if (kind === 'nuxt') {
+    console.log(`
+  Add the following to your nuxt.config.ts manually:
+
+  import { vueI18nMapPlugin } from 'vue-i18n-kit/vite'
+
+  export default defineNuxtConfig({
+    vite: {
+      plugins: [
+        vueI18nMapPlugin({
+          locales: {
+${entries}
+          },
+        }),
+      ],
+    },
+  })
+`)
+  } else {
+    console.log(`
   Add the following to your vite.config.ts manually:
 
   import { vueI18nMapPlugin } from 'vue-i18n-kit/vite'
@@ -339,6 +430,7 @@ ${entries}
     ],
   })
 `)
+  }
 }
 
 // ── Main entry point ──────────────────────────────────────────────────────────
@@ -370,17 +462,17 @@ export function runAutoConfig(cwd: string): void {
   generateEntriesMap(cwd, entriesOutput)
   console.log(`[vue-i18n-kit] Written ${entriesOutput}`)
 
-  // 4. Update vite.config (or print instructions if not found)
-  const configPath = findViteConfig(cwd)
+  // 4. Update vite.config.ts / nuxt.config.ts (or print instructions if not found)
+  const projectConfig = findProjectConfig(cwd)
 
-  if (!configPath) {
-    console.log('\n[vue-i18n-kit] vite.config.ts not found.')
-    printManualInstructions(locales)
+  if (!projectConfig) {
+    console.log('\n[vue-i18n-kit] Neither vite.config.ts nor nuxt.config.ts found.')
+    printManualInstructions('vite', locales)
     return
   }
 
-  updateViteConfig(configPath, locales)
-  const relConfig = relative(cwd, configPath).replace(/\\/g, '/')
+  updateConfig(projectConfig.path, projectConfig.kind, locales)
+  const relConfig = relative(cwd, projectConfig.path).replace(/\\/g, '/')
   console.log(`[vue-i18n-kit] Updated ${relConfig}`)
   console.log('\n[vue-i18n-kit] Done. Run: vue-i18n-kit ui')
 }

@@ -755,38 +755,59 @@ A browser-based editor for viewing and editing locale files directly in your pro
 npm run i18n:ui
 ```
 
-`auto-config` automatically finds your locale JSON files, generates the data index, and configures `vueI18nMapPlugin` in `vite.config.ts` — no manual setup required. The editor then opens at `http://localhost:4173`.
+`auto-config` reads your `createVueI18nPlugin(...)` call as the **single source of truth** — only the locales explicitly registered there are included. It generates the data index and configures `vueI18nMapPlugin` automatically. The editor then opens at `http://localhost:4173`.
 
 ### `auto-config` — what it does
 
-1. **Discovers locale files** — scans `src/locales/`, `locales/`, `src/i18n/`, and other common directories for JSON files with locale-code names (`en.json`, `ru.json`, `zh-CN.json`, …).
+1. **Reads locale list from `createVueI18nPlugin`** — scans source files for the plugin call and extracts locale codes, file paths (from `import(...)` / `~/...`), and `meta` from each `LocaleDefinition`. Only locales wired up to the app are included.
 2. **Generates `i18n-tools/locales.config.json`** — resolved paths and metadata for each locale.
 3. **Generates `i18n-tools/locales.entries.json`** — map of `{ "key": ["src/file.vue", …] }` built by scanning `t()`, `tm()`, `$t()` calls across the project.
-4. **Updates `vite.config.ts`** — adds or updates `vueI18nMapPlugin` with the discovered locale paths. If no vite config is found, prints copy-paste instructions to the console.
+4. **Updates the project config** — detects `vite.config.ts` or `nuxt.config.ts` and adds or updates `vueI18nMapPlugin` accordingly. Prints copy-paste instructions if neither file is found.
 
 Both generated files can be added to `.gitignore`.
 
-### `vite.config.ts` — what gets written
+### What gets written to the project config
 
-After the first `auto-config` run your config will contain:
+`auto-config` detects the project type automatically and writes to the correct file.
+
+**`vite.config.ts` (Vue / Vite):**
 
 ```ts
 import { vueI18nMapPlugin } from 'vue-i18n-kit/vite'
 
 export default defineConfig({
   plugins: [
+    vue(),
     vueI18nMapPlugin({
       locales: {
-        en: { path: 'src/locales/en.json' },
-        ru: { path: 'src/locales/ru.json' },
+        en: { path: 'src/locales/en.json', meta: { display: 'English', flag: '🇬🇧' } },
+        ru: { path: 'src/locales/ru.json', meta: { display: 'Русский', flag: '🇷🇺' } },
       },
     }),
-    // ... your other plugins
   ],
 })
 ```
 
-On subsequent runs `auto-config` updates only the `locales:` argument — any changes you made to the rest of the config are preserved. If you add metadata (`meta: { display: '...' }`) manually, re-running will overwrite those entries; keep a custom config if you need stable metadata.
+**`nuxt.config.ts` (Nuxt):**
+
+```ts
+import { vueI18nMapPlugin } from 'vue-i18n-kit/vite'
+
+export default defineNuxtConfig({
+  vite: {
+    plugins: [
+      vueI18nMapPlugin({
+        locales: {
+          en: { path: 'locales/en.json', meta: { display: 'English', flag: '🇬🇧' } },
+          ru: { path: 'locales/ru.json', meta: { display: 'Русский', flag: '🇷🇺' } },
+        },
+      }),
+    ],
+  },
+})
+```
+
+On subsequent runs `auto-config` replaces the entire `vueI18nMapPlugin(...)` call with fresh data from `createVueI18nPlugin` — `meta` included. Any other config changes are preserved.
 
 ### `vue-i18n-kit ui`
 
