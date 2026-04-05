@@ -2,9 +2,11 @@ import { runAdd } from './commands/add.js'
 import { runCheck } from './commands/check.js'
 import { runAutoConfig } from './commands/auto-config.js'
 import { runInitWizard } from './commands/init-wizard.js'
+import { runMerge } from './commands/merge.js'
+import { runPrune } from './commands/prune.js'
 import { startUiServer } from '../ui-server/server.js'
 
-const VERSION = '0.1.0'
+const VERSION = '0.2.1'
 
 const [, , command, ...rest] = process.argv
 
@@ -63,6 +65,35 @@ switch (command) {
     break
   }
 
+  case 'merge': {
+    const source = rest.find((a) => !a.startsWith('--'))
+    if (!source) {
+      console.error('Usage: vue-i18n-kit merge <source.json> [--dir <path>] [--locale <code>] [--overwrite] [--dry]')
+      process.exit(1)
+    }
+    const flags = parseFlags(rest)
+    runMerge({
+      source,
+      dir: str(flags['dir'], 'src/locales'),
+      locale: typeof flags['locale'] === 'string' ? flags['locale'] : undefined,
+      overwrite: flags['overwrite'] === true,
+      dry: flags['dry'] === true,
+    })
+    break
+  }
+
+  case 'prune': {
+    const flags = parseFlags(rest)
+    runPrune({
+      dir: str(flags['dir'], 'src/locales'),
+      cwd: process.cwd(),
+      dry: flags['dry'] === true,
+      yes: flags['yes'] === true,
+      entriesFile: typeof flags['entries'] === 'string' ? flags['entries'] : undefined,
+    })
+    break
+  }
+
   case 'auto-config': {
     runAutoConfig(process.cwd())
     break
@@ -106,11 +137,24 @@ Commands:
     --default <locale>          Reference locale        (default: first alphabetically)
     --fail                      Exit with code 1 if any keys are missing
 
+  merge <source.json> [options] Deep-merge a base/shared JSON into locale file(s)
+    --dir <path>                Locales directory       (default: src/locales)
+    --locale <code>             Only merge into this locale (default: all)
+    --overwrite                 Overwrite existing keys (default: add missing only)
+    --dry                       Preview changes without writing files
+
+  prune [options]               Remove keys not referenced in source code
+    --dir <path>                Locales directory       (default: src/locales)
+    --entries <file>            Path to pre-built entries JSON (skips scanning)
+    --dry                       Preview keys to remove without writing files
+    --yes                       Skip confirmation prompt
+
 Examples:
-  npx vue-i18n-kit init                      # first-time setup or update config
-  npx vue-i18n-kit ui                        # open locale editor
-  npx vue-i18n-kit auto-config && vue-i18n-kit ui  # non-interactive flow
+  npx vue-i18n-kit init                           # first-time setup or update config
+  npx vue-i18n-kit ui                             # open locale editor
   npx vue-i18n-kit add fr --from en --empty
   npx vue-i18n-kit check --default en --fail
+  npx vue-i18n-kit merge shared/base.json --dry   # preview base dictionary merge
+  npx vue-i18n-kit prune --dry                    # preview unused key removal
 `)
 }

@@ -1,5 +1,5 @@
 import { existsSync, readFileSync, writeFileSync, copyFileSync } from 'node:fs'
-import { join, resolve } from 'node:path'
+import { join, resolve, dirname } from 'node:path'
 import type { I18nKitConfig, LocaleConfig } from './schema.js'
 
 export type { I18nKitConfig, LocaleConfig, LocaleMeta } from './schema.js'
@@ -31,6 +31,51 @@ export function backupFile(filePath: string): void {
   if (existsSync(filePath)) {
     copyFileSync(filePath, filePath + '.backup')
   }
+}
+
+/**
+ * Resolves the base locale directory from the `extends` field.
+ * Returns null if extends is not set or can't be resolved.
+ */
+export function resolveExtendsDir(cwd: string, config: I18nKitConfig): string | null {
+  if (!config.extends) return null
+  const target = resolve(cwd, config.extends)
+  if (!existsSync(target)) return null
+
+  // If target is a config file, use its directory
+  try {
+    const stat = existsSync(target) && readFileSync(target, 'utf-8')
+    if (stat && target.endsWith('.json')) {
+      const baseConfig = JSON.parse(stat as string) as I18nKitConfig
+      if (baseConfig.localesDir) {
+        return resolve(dirname(target), baseConfig.localesDir)
+      }
+      return dirname(target)
+    }
+  } catch { /* fall through */ }
+
+  return target
+}
+
+/**
+ * Reads base locale data from the extends directory.
+ * Returns a map of code → flat key/value record.
+ */
+export function readBaseLocales(
+  baseDir: string,
+): Record<string, Record<string, unknown>> {
+  const result: Record<string, Record<string, unknown>> = {}
+  try {
+    const { readdirSync } = require('node:fs') as typeof import('node:fs')
+    const files = readdirSync(baseDir).filter((f: string) => f.endsWith('.json'))
+    for (const file of files) {
+      const code = file.slice(0, -5)
+      try {
+        result[code] = JSON.parse(readFileSync(join(baseDir, file), 'utf-8')) as Record<string, unknown>
+      } catch { /* skip malformed */ }
+    }
+  } catch { /* dir not readable */ }
+  return result
 }
 
 /**
@@ -71,10 +116,12 @@ export function buildLegacyLocalesConfig(
 export function readLocalesForServer(cwd: string): {
   locales: Array<{ code: string; path: string; meta?: Record<string, unknown> }>
   source: 'kit-config' | 'legacy'
+  baseLocalesDir?: string
 } | null {
   const config = readConfig(cwd)
   if (config?.locales.length) {
-    return { locales: deriveLocalesMap(cwd, config), source: 'kit-config' }
+    const baseLocalesDir = resolveExtendsDir(cwd, config) ?? undefined
+    return { locales: deriveLocalesMap(cwd, config), source: 'kit-config', baseLocalesDir }
   }
 
   const legacyPath = join(cwd, 'i18n-tools', 'locales.config.json')

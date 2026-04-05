@@ -9,6 +9,7 @@ const props = defineProps<{
   allKeys: string[]
   entries: LocaleEntries
   duplicateKeys?: string[]
+  phantomKeys?: string[]
 }>()
 
 const emit = defineEmits<{
@@ -139,6 +140,16 @@ const rootCoverage = computed(() => {
         <div class="stat-body">
           <span class="stat-label">Unused keys</span>
           <span class="stat-value">{{ unusedKeys.length }}</span>
+        </div>
+      </div>
+
+      <div class="stat-card" :class="(phantomKeys?.length ?? 0) > 0 ? 'stat-card--red' : 'stat-card--green'">
+        <div class="stat-icon-wrap" :class="(phantomKeys?.length ?? 0) > 0 ? 'stat-icon-wrap--red' : 'stat-icon-wrap--green'">
+          <Icon :name="(phantomKeys?.length ?? 0) > 0 ? 'warning' : 'check'" :size="16" />
+        </div>
+        <div class="stat-body">
+          <span class="stat-label">Phantom keys</span>
+          <span class="stat-value">{{ phantomKeys?.length ?? 0 }}</span>
         </div>
       </div>
     </div>
@@ -284,6 +295,26 @@ const rootCoverage = computed(() => {
         </p>
       </section>
 
+      <!-- ── Phantom keys ────────────────────────────────────────────────── -->
+      <section class="panel" :class="{ 'panel--alert': phantomKeys?.length }">
+        <h2 class="panel-title">
+          <Icon name="warning" :size="13" class="panel-title-icon" :class="phantomKeys?.length ? 'panel-title-icon--red' : 'panel-title-icon--muted'" />
+          Phantom keys
+          <span class="panel-count">{{ phantomKeys?.length ?? 0 }}</span>
+        </h2>
+        <p class="panel-subtitle">Used in code via <code class="inline-code">t()</code> but missing from all locale files.</p>
+        <div v-if="phantomKeys?.length" class="unused-list">
+          <span v-for="k in phantomKeys" :key="k" class="key-chip key-chip--phantom">
+            <Icon name="warning" :size="9" />
+            {{ k }}
+          </span>
+        </div>
+        <p v-else class="empty-msg">
+          <Icon name="check" :size="13" />
+          All code references are declared in locale files.
+        </p>
+      </section>
+
       <!-- ── Duplicate values ─────────────────────────────────────────────── -->
       <section v-if="duplicateKeys && duplicateKeys.length" class="panel">
         <h2 class="panel-title">
@@ -352,6 +383,9 @@ const rootCoverage = computed(() => {
 .stat-icon-wrap--green  { background: rgba(74,222,128,0.1);  color: #4ade80; border: 1px solid rgba(74,222,128,0.15); }
 .stat-icon-wrap--orange { background: rgba(251,146,60,0.1);  color: #fb923c; border: 1px solid rgba(251,146,60,0.15); }
 .stat-icon-wrap--yellow { background: rgba(251,191,36,0.1);  color: #fbbf24; border: 1px solid rgba(251,191,36,0.15); }
+.stat-card--red    { border-color: rgba(248,113,113,0.15);  background: linear-gradient(135deg, #18181b 0%, rgba(248,113,113,0.03) 100%); }
+.stat-icon-wrap--red { background: rgba(248,113,113,0.1); color: #f87171; border: 1px solid rgba(248,113,113,0.15); }
+.stat-card--red .stat-value { color: #f87171; }
 
 .stat-body {
   display: flex;
@@ -513,6 +547,7 @@ const rootCoverage = computed(() => {
 .panel-title-icon--yellow { color: #fbbf24; }
 .panel-title-icon--indigo { color: #818cf8; }
 .panel-title-icon--purple { color: #c084fc; }
+.panel-title-icon--red    { color: #f87171; }
 .panel-title-icon--muted  { color: #3f3f46; }
 
 .panel-subtitle {
@@ -641,6 +676,23 @@ const rootCoverage = computed(() => {
   background: rgba(192, 132, 252, 0.06);
   border: 1px solid rgba(192, 132, 252, 0.2);
   color: #c084fc;
+}
+
+.key-chip--phantom {
+  background: rgba(248, 113, 113, 0.07);
+  border: 1px solid rgba(248, 113, 113, 0.2);
+  color: #f87171;
+}
+
+.panel--alert { border-color: rgba(248, 113, 113, 0.18); }
+
+.inline-code {
+  font-family: 'SF Mono', 'Fira Code', monospace;
+  font-size: 10px;
+  background: #27272a;
+  padding: 1px 4px;
+  border-radius: 3px;
+  color: #a1a1aa;
 }
 
 .empty-msg {

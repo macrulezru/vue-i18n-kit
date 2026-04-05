@@ -219,4 +219,7 @@ export const mockEntries: Record<string, string[]> = {
   'auth.reset.title':          ['src/views/ResetPassword.vue'],
   'auth.reset.submit':         ['src/views/ResetPassword.vue'],
   'auth.reset.success':        ['src/views/ResetPassword.vue'],
+  // phantom keys — used in code but not declared in any locale file
+  'profile.avatar.upload':     ['src/views/Profile.vue'],
+  'notifications.mark_all_read': ['src/components/NotificationBell.vue'],
 }

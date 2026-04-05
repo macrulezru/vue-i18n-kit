@@ -53,6 +53,12 @@ const allKeys = computed(() => {
   return [...keys].sort()
 })
 
+// ── Phantom key detection (used in code but absent from ALL locales) ──────────
+
+const phantomKeys = computed<string[]>(() =>
+  Object.keys(entries.value).filter(k => !allKeys.value.includes(k))
+)
+
 // ── Duplicate key detection ───────────────────────────────────────────────────
 
 const duplicateKeys = computed<string[]>(() => {
@@ -763,6 +769,7 @@ onMounted(async () => {
       :all-keys="allKeys"
       :entries="entries"
       :duplicate-keys="duplicateKeys"
+      :phantom-keys="phantomKeys"
       @filter-namespace="handleFilterNamespace"
     />
 
@@ -780,6 +787,7 @@ onMounted(async () => {
       :ide-scheme="ideScheme"
       :external-search="externalSearch"
       :duplicate-keys="duplicateKeys"
+      :phantom-keys="phantomKeys"
       @save="(c, k, v) => applyTranslation(c, k, v)"
       @delete-key="handleDeleteKey"
       @delete-keys="handleBatchDeleteKeys"

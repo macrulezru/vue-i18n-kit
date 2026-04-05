@@ -2,7 +2,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from 'node:ht
 import { existsSync, readFileSync, writeFileSync, mkdirSync, statSync, watch as fsWatch } from 'node:fs'
 import { join, extname, dirname, resolve } from 'node:path'
 import { execSync } from 'node:child_process'
-import { readLocalesForServer, readConfig, writeConfig } from '../config/index.js'
+import { readLocalesForServer, readConfig, writeConfig, readBaseLocales } from '../config/index.js'
 
 export interface UiServerOptions {
   cwd?: string
@@ -100,6 +100,22 @@ export function startUiServer(options: UiServerOptions = {}): void {
     console.log('[vue-i18n-kit] Using legacy config. Consider running  vue-i18n-kit init  to migrate.')
 
   const locales = localesResult.locales
+  const baseLocales = localesResult.baseLocalesDir
+    ? readBaseLocales(localesResult.baseLocalesDir)
+    : {}
+
+  function deepMergeBase(base: Record<string, unknown>, project: Record<string, unknown>): Record<string, unknown> {
+    const result: Record<string, unknown> = { ...base }
+    for (const [k, v] of Object.entries(project)) {
+      if (v !== null && typeof v === 'object' && !Array.isArray(v) &&
+          result[k] !== null && typeof result[k] === 'object') {
+        result[k] = deepMergeBase(result[k] as Record<string, unknown>, v as Record<string, unknown>)
+      } else {
+        result[k] = v
+      }
+    }
+    return result
+  }
 
   if (!existsSync(publicDir)) {
     console.error('\n[vue-i18n-kit] UI assets not found.\n')
@@ -190,7 +206,14 @@ export function startUiServer(options: UiServerOptions = {}): void {
         catch { res.writeHead(500).end('Failed to write locale file') }
         return
       }
-      try { res.writeHead(200, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' }); res.end(readFileSync(locale.path, 'utf-8')) }
+      try {
+        const projectData = existsSync(locale.path)
+          ? JSON.parse(readFileSync(locale.path, 'utf-8')) as Record<string, unknown>
+          : {}
+        const base = baseLocales[code]
+        const merged = base ? deepMergeBase(base, projectData) : projectData
+        json(res, merged)
+      }
       catch { res.writeHead(500).end('Failed to read locale file') }
       return
     }

@@ -26,6 +26,14 @@ export interface LocaleConfig {
 export interface I18nKitConfig {
   /** Config schema version — current: 1 */
   version: number
+  /**
+   * Path to a base/shared locale directory or i18n-kit.config.json to extend.
+   * Base keys are merged underneath project keys (project always wins).
+   * Useful for org-wide shared dictionaries.
+   * @example "../../shared-i18n"
+   * @example "node_modules/@myorg/i18n"
+   */
+  extends?: string
   /** Directory containing locale JSON files, relative to project root */
   localesDir: string
   /** Directory for generated toolkit files (config, entries map), relative to project root */

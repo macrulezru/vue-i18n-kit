@@ -15,8 +15,13 @@ A reusable Vue 3 localization plugin that wraps [`vue-i18n`](https://vue-i18n.in
 - **Plugin service** — `createVueI18nPlugin` returns an `I18nPlugin` with a `.service` property — fully usable outside Vue components (router guards, Pinia stores, SSR entry points)
 - **Locale change hook** — `service.onLocaleChange(cb)` fires after every successful locale switch; returns an unsubscribe function
 - **TypeScript-first** — all public APIs are fully typed, no `any` leaks into consumer code
-- **Vite plugin** — checks all locale files for missing or extra keys at build time (import from `vue-i18n-kit/vite`)
-- **CLI** — `vue-i18n-kit init / add / check` scaffolds and audits locale files from the terminal
+- **Vite check plugin** — checks all locale files for missing or extra keys at build time (import from `vue-i18n-kit/vite`)
+- **Vite inline plugin** — `vueI18nInlinePlugin` bakes all locale JSON into the bundle as a static virtual module — zero HTTP requests at runtime
+- **CLI** — `vue-i18n-kit init / add / check / merge / prune` scaffolds, audits, and cleans locale files from the terminal
+- **Dictionary merge** — `vue-i18n-kit merge` deep-merges a shared/corporate base dictionary into project locale files
+- **Dead key pruning** — `vue-i18n-kit prune` removes keys not referenced anywhere in the source code
+- **Base dictionary (extends)** — `extends` field in `i18n-kit.config.json` loads a shared locale directory and merges it under project keys
+- **Locale Editor UI** — browser-based editor with dashboard, inline editing, group operations, phantom key detection, plural preview, and more
 
 ## Requirements
 
@@ -818,6 +823,74 @@ export default defineConfig({
 
 ---
 
+## Vite Plugin — Inline Translations
+
+`vueI18nInlinePlugin` bakes all locale JSON files into the production bundle at build time via a virtual module. There are **no runtime HTTP requests** — the translations are a plain JavaScript object embedded in the bundle.
+
+Ideal for: SSR apps, offline-capable PWAs, small projects where bundle size matters less than loading latency.
+
+### Setup
+
+```ts
+// vite.config.ts
+import { defineConfig } from 'vite'
+import vue from '@vitejs/plugin-vue'
+import { vueI18nInlinePlugin } from 'vue-i18n-kit/vite'
+
+export default defineConfig({
+  plugins: [
+    vue(),
+    vueI18nInlinePlugin({
+      locales: {
+        en: 'src/locales/en.json',
+        ru: 'src/locales/ru.json',
+        de: 'src/locales/de.json',
+      },
+    }),
+  ],
+})
+```
+
+### Usage in your app
+
+```ts
+// main.ts
+import { createVueI18nPlugin } from 'vue-i18n-kit'
+import inlineLocales from 'virtual:vue-i18n-kit/locales'
+
+app.use(
+  createVueI18nPlugin({
+    defaultLocale: 'en',
+    locales: {
+      en: { messages: inlineLocales.en, meta: { display: 'English' } },
+      ru: { messages: inlineLocales.ru, meta: { display: 'Русский' } },
+      de: { messages: inlineLocales.de, meta: { display: 'Deutsch' } },
+    },
+  })
+)
+```
+
+Because `inlineLocales.ru` is a plain object (not a function), `vue-i18n-kit` skips the network request and uses it directly.
+
+### TypeScript — virtual module type declaration
+
+Add to your project's `env.d.ts` or `vite-env.d.ts`:
+
+```ts
+declare module 'virtual:vue-i18n-kit/locales' {
+  const locales: Record<string, Record<string, unknown>>
+  export default locales
+}
+```
+
+### Options
+
+| Option | Type | Description |
+|---|---|---|
+| `locales` | `Record<string, string \| { path, meta? }>` | Map of locale codes to JSON file paths (relative to project root). |
+
+---
+
 ## CLI — Locale File Management
 
 The `vue-i18n-kit` CLI helps scaffold and audit locale JSON files.
@@ -892,6 +965,54 @@ vue-i18n-kit check --default en --fail
   run: npx vue-i18n-kit check --default en --fail
 ```
 
+### `merge` — Merge a shared dictionary
+
+Deep-merges a base or corporate JSON dictionary into project locale files. Only adds missing keys by default — existing translations are left untouched unless `--overwrite` is passed.
+
+```bash
+# Add all missing keys from a shared base (dry run first)
+vue-i18n-kit merge shared/base.json --dry
+vue-i18n-kit merge shared/base.json
+
+# Merge into a single locale only, overwriting existing values
+vue-i18n-kit merge updates.json --locale ru --overwrite
+```
+
+| Flag | Default | Description |
+|---|---|---|
+| `--dir <path>` | `src/locales` | Locales directory. |
+| `--locale <code>` | all locales | Only merge into this locale code. |
+| `--overwrite` | `false` | Overwrite existing keys instead of skipping them. |
+| `--dry` | `false` | Preview changes without writing any files. |
+
+**Use case — corporate shared dictionary:**
+
+Maintain a `shared/base.json` in a monorepo or npm package and run `merge` after pulling to keep all project locales up to date with company-wide terms.
+
+### `prune` — Remove unused keys
+
+Scans source files for `t()`, `tm()`, `$t()` calls and removes any locale keys not referenced anywhere in the project. Useful before a release to keep JSON files lean.
+
+```bash
+# Preview what would be removed
+vue-i18n-kit prune --dry
+
+# Apply (will scan source files first)
+vue-i18n-kit prune
+
+# Use a pre-built entries file (skips scanning, faster in CI)
+vue-i18n-kit prune --entries i18n-tools/locales.entries.json
+```
+
+| Flag | Default | Description |
+|---|---|---|
+| `--dir <path>` | `src/locales` | Locales directory. |
+| `--entries <file>` | _(scan)_ | Path to a pre-built `locales.entries.json`; skips scanning. |
+| `--dry` | `false` | Print keys that would be removed, without writing files. |
+| `--yes` | `false` | Skip confirmation prompt. |
+
+> **Tip:** Run `prune --dry` in CI and fail the build if output is non-empty to enforce a "no dead keys" policy.
+
 ---
 
 ## Locale Editor UI
@@ -904,14 +1025,16 @@ A browser-based editor for viewing and editing locale files directly in your pro
 
 - **Coverage overview** — overall coverage bar, per-locale progress with missing key count
 - **Namespace cards** — coverage percentage per namespace; click any card to jump straight to that namespace in the editor
-- **Duplicate values** — keys where all locales share the same non-empty value (likely untranslated)
 - **Unused keys** — keys with no `t()`/`tm()`/`$t()` usages found in source files
+- **Phantom keys** — keys referenced in code via `t()` but absent from all locale files; highlighted in red so they are hard to miss
+- **Duplicate values** — keys where all locales share the same non-empty value (likely untranslated)
 
 #### Editor table
 
-- **Inline editing** — click any cell to edit in place; multiline textarea auto-resizes; save with Enter or ✓, cancel with Escape or ✕; changes are written immediately to locale JSON on disk
+- **Inline editing** — click any cell to edit in place; input immediately receives focus; multiline textarea auto-resizes; save with Enter or ✓, cancel with Escape or ✕; changes are written immediately to locale JSON on disk
 - **Namespace groups** — keys grouped by dotted prefix (`auth.form.label` → group `auth` → sub-group `form` → key `label`); groups collapse/expand; arbitrary nesting depth is supported
 - **Group operations** — on any group row: add a nested sub-group, add a key, rename the namespace (renames all keys), delete the group and all its keys
+- **Empty groups** — create a group without any keys first; the group persists in the UI until a key is added or the page reloads
 - **Inline key actions** — rename, duplicate, add/edit note, delete — appear next to the key label on hover
 - **Batch select & delete** — row checkboxes + bulk delete bar
 - **Usage map** — expand any key row to see which source files reference it; clickable file chips open the file in your IDE (VS Code, Cursor, WebStorm, PhpStorm, IntelliJ)
@@ -920,6 +1043,7 @@ A browser-based editor for viewing and editing locale files directly in your pro
 - **Duplicate badge** — `dup` badge on keys where all locales have identical non-empty values
 - **Copy from reference** — one-click button on missing/empty cells to copy the value from the reference locale
 - **Interpolation preview** — expand a key row to fill in `{variable}` values and see the rendered output per locale
+- **Plural preview** — for keys with ICU plural format (`{count, plural, one{...} other{...}}`), the detail panel shows a table of rendered forms for `n = 0, 1, 2, 5, 11, 21` across all locales
 - **Density toggle** — compact / default / relaxed row height
 - **Keyboard navigation** — arrow keys move between cells; Enter starts editing; Space toggles selection
 
@@ -933,8 +1057,17 @@ A browser-based editor for viewing and editing locale files directly in your pro
 | Export CSV | — | Download all translations as a CSV file |
 | Import CSV | — | Upload a CSV; preview diff before applying |
 | Sort keys | — | Sort all keys alphabetically in every locale file |
+| Add locale | — | Add a new language to the project — creates the JSON file and updates the config |
 | Translate missing | — | Auto-translate missing values via LibreTranslate (self-hosted or public API) |
 | Shortcut help | `?` | Show keyboard shortcut cheatsheet |
+
+#### Filter bar
+
+| Filter | Description |
+|---|---|
+| `all` / `missing` / `complete` | Show all keys, only keys with missing translations, or only fully translated keys |
+| `unused` | Show only keys not referenced in any source file |
+| `phantom` | Show only keys used in code but absent from all locale files (appears when phantoms exist) |
 
 #### Settings (gear icon)
 
@@ -1041,6 +1174,49 @@ vue-i18n-kit ui [--port <number>]
 ```
 
 With a manually maintained config you are responsible for keeping `vueI18nMapPlugin` in sync when you add or rename locales. The recommended `auto-config && ui` combination does this automatically.
+
+---
+
+## Base Dictionary (extends)
+
+The `extends` field in `i18n-kit.config.json` lets a project inherit translations from a shared base — for example, a corporate terminology dictionary maintained centrally in a monorepo or npm package.
+
+```json
+// i18n-kit.config.json
+{
+  "extends": "../../shared-i18n",
+  ...
+}
+```
+
+**How it works:**
+
+1. The value of `extends` is resolved relative to the project root.
+2. It can point to a directory containing locale JSON files (e.g. `en.json`, `ru.json`) or to another `i18n-kit.config.json` whose `localesDir` will be followed.
+3. When the editor reads a locale, base keys are merged underneath project keys — **the project always wins**. Base-only keys appear in the editor but are not written to project locale files on save.
+
+**Typical structure:**
+
+```
+monorepo/
+├── shared-i18n/
+│   ├── en.json     ← base dictionary (company-wide terms)
+│   └── ru.json
+└── my-app/
+    ├── i18n-kit.config.json   ← "extends": "../shared-i18n"
+    └── src/locales/
+        ├── en.json   ← app-specific overrides
+        └── ru.json
+```
+
+**Combined with `merge`:**
+
+To copy base keys into project files permanently (rather than loading them dynamically), use the `merge` CLI command:
+
+```bash
+vue-i18n-kit merge ../shared-i18n/en.json --locale en
+vue-i18n-kit merge ../shared-i18n/ru.json --locale ru
+```
 
 ---
 
