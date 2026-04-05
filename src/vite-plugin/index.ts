@@ -18,6 +18,8 @@ export interface VitePlugin {
   configResolved?(config: unknown): void
   buildStart?(this: { warn(msg: string | { message: string }): void; error(msg: string | { message: string }): void }): void
   handleHotUpdate?(ctx: unknown): void
+  resolveId?(id: string, importer?: string): string | null | undefined
+  load?(id: string): string | null | undefined
 }
 
 export interface I18nCheckPluginOptions {
@@ -293,6 +295,103 @@ export function vueI18nMapPlugin(options: I18nMapPluginOptions): VitePlugin {
       cfg.logger.info(`[vue-i18n-kit] Locale entries written to ${entriesOutput}`)
 
       process.nextTick(() => process.exit(0))
+    },
+  }
+}
+
+// ── Inline plugin ─────────────────────────────────────────────────────────────
+
+const VIRTUAL_MODULE_ID = 'virtual:vue-i18n-kit/locales'
+const RESOLVED_ID = '\0' + VIRTUAL_MODULE_ID
+
+export interface I18nInlinePluginOptions {
+  /**
+   * Map of locale codes to their JSON file paths (relative to project root).
+   * Accepts a plain path string or a `{ path, meta }` object.
+   *
+   * @example
+   * locales: {
+   *   en: 'src/locales/en.json',
+   *   ru: { path: 'src/locales/ru.json', meta: { display: 'Русский' } },
+   * }
+   */
+  locales: Record<string, string | { path: string; meta?: Record<string, unknown> }>
+}
+
+/**
+ * Vite plugin that provides a virtual module `virtual:vue-i18n-kit/locales`
+ * exporting all locale JSON files as a static object baked into the bundle.
+ *
+ * This eliminates runtime HTTP requests for locale files — useful for
+ * SSR, offline apps, or small projects that want zero loading latency.
+ *
+ * @example
+ * // vite.config.ts
+ * import { vueI18nInlinePlugin } from 'vue-i18n-kit/vite'
+ *
+ * export default defineConfig({
+ *   plugins: [
+ *     vueI18nInlinePlugin({
+ *       locales: {
+ *         en: 'src/locales/en.json',
+ *         ru: 'src/locales/ru.json',
+ *       },
+ *     }),
+ *   ],
+ * })
+ *
+ * // your app setup
+ * import inlineLocales from 'virtual:vue-i18n-kit/locales'
+ * import { createI18n } from 'vue-i18n-kit'
+ *
+ * const i18n = createI18n({
+ *   locales: {
+ *     en: inlineLocales.en,   // plain object — no lazy loading
+ *     ru: inlineLocales.ru,
+ *   },
+ *   defaultLocale: 'en',
+ * })
+ */
+export function vueI18nInlinePlugin(options: I18nInlinePluginOptions): VitePlugin {
+  const { locales } = options
+  let root = ''
+
+  return {
+    name: 'vue-i18n-kit:inline',
+    enforce: 'pre',
+
+    configResolved(config: unknown) {
+      root = (config as ResolvedConfig).root
+    },
+
+    resolveId(id: string) {
+      if (id === VIRTUAL_MODULE_ID) return RESOLVED_ID
+    },
+
+    load(id: string) {
+      if (id !== RESOLVED_ID) return
+
+      const result: Record<string, unknown> = {}
+
+      for (const [code, entry] of Object.entries(locales)) {
+        const locPath = typeof entry === 'string' ? entry : entry.path
+        const absPath = resolve(root, locPath)
+
+        if (!existsSync(absPath)) {
+          console.warn(`[vue-i18n-kit:inline] Locale file not found: ${absPath}`)
+          result[code] = {}
+          continue
+        }
+
+        try {
+          result[code] = JSON.parse(readFileSync(absPath, 'utf-8')) as Record<string, unknown>
+        } catch {
+          console.warn(`[vue-i18n-kit:inline] Failed to parse: ${absPath}`)
+          result[code] = {}
+        }
+      }
+
+      return `export default ${JSON.stringify(result, null, 2)}`
     },
   }
 }

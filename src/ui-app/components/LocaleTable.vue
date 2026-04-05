@@ -17,6 +17,7 @@ const props = defineProps<{
   ideScheme?: string
   externalSearch?: string
   duplicateKeys?: string[]
+  phantomKeys?: string[]
 }>()
 
 const emit = defineEmits<{
@@ -38,7 +39,8 @@ const density = usePersisted<'compact' | 'default' | 'relaxed'>('i18nkit:density
 
 const search         = ref('')
 const statusFilter   = ref<'all' | 'missing' | 'complete'>('all')
-const showUnusedOnly = ref(false)
+const showUnusedOnly  = ref(false)
+const showPhantomOnly = ref(false)
 
 // External search override (e.g. from namespace click in Dashboard)
 watch(() => props.externalSearch, val => { if (val != null) search.value = val }, { immediate: true })
@@ -163,7 +165,8 @@ function keyPassesFilters(key: string): boolean {
     const inNote   = (props.notes[key] ?? '').toLowerCase().includes(q)
     if (!inKey && !inValues && !inNote) return false
   }
-  if (showUnusedOnly.value && props.entries[key]?.length) return false
+  if (showUnusedOnly.value  && props.entries[key]?.length) return false
+  if (showPhantomOnly.value && !props.phantomKeys?.includes(key)) return false
   if (statusFilter.value === 'missing'  && !props.locales.some(l => !props.localeData[l.code]?.[key])) return false
   if (statusFilter.value === 'complete' && props.locales.some(l => !props.localeData[l.code]?.[key]))  return false
   return true
@@ -297,6 +300,47 @@ function placeholderVars(key: string): string[] {
 }
 function renderInterp(str: string, key: string): string {
   return str.replace(/\{(\w+)\}/g, (_, v) => interpValues.value[`${key}:${v}`] ?? `{${v}}`)
+}
+
+// ── Plural preview ────────────────────────────────────────────────────────────
+
+const PLURAL_COUNTS = [0, 1, 2, 5, 11, 21]
+
+/** Returns the plural variable name if ALL locale values for this key use ICU plural format */
+function pluralVar(key: string): string | null {
+  const pattern = /\{(\w+),\s*plural\s*,/
+  for (const locale of props.locales) {
+    const val = props.localeData[locale.code]?.[key]
+    if (val && pattern.test(val)) {
+      return val.match(pattern)?.[1] ?? null
+    }
+  }
+  return null
+}
+
+/** Render ICU plural string for a given count value */
+function renderPlural(str: string, varName: string, count: number): string {
+  if (!str) return '—'
+  // Replace {varName, plural, one{...} other{...}} with the matching form
+  const re = new RegExp(`\\{${varName},\\s*plural\\s*,([^}]+(?:\\{[^}]*\\}[^}]*)*)\\}`)
+  const m = str.match(re)
+  if (!m) return str.replace(new RegExp(`\\{${varName}\\}`, 'g'), String(count))
+
+  const body = m[1]
+  // Try exact =N match first
+  const exact = body.match(new RegExp(`=\\s*${count}\\s*\\{([^}]*)\\}`))
+  if (exact) return exact[1].replace(/#/g, String(count))
+
+  // Determine CLDR plural category
+  let category = 'other'
+  try { category = new Intl.PluralRules('en').select(count) } catch { /* noop */ }
+
+  // Try locale category match (one, few, many, other...)
+  for (const cat of [category, 'other']) {
+    const catMatch = body.match(new RegExp(`(?<![=\\d])${cat}\\s*\\{([^}]*)\\}`))
+    if (catMatch) return catMatch[1].replace(/#/g, String(count))
+  }
+  return str
 }
 
 // ── Jump to key ───────────────────────────────────────────────────────────────
@@ -511,6 +555,10 @@ function fileUrl(file: string): string {
     <button class="filter-btn filter-btn--unused" :class="{ active: showUnusedOnly }" @click="showUnusedOnly = !showUnusedOnly">
       <Icon name="zap" :size="11" />unused
     </button>
+    <button v-if="phantomKeys?.length" class="filter-btn filter-btn--phantom" :class="{ active: showPhantomOnly }" @click="showPhantomOnly = !showPhantomOnly">
+      <Icon name="warning" :size="11" />phantom
+      <span class="filter-count">{{ phantomKeys.length }}</span>
+    </button>
 
     <div class="toolbar-sep" />
 
@@ -684,6 +732,30 @@ function fileUrl(file: string): string {
                         <span class="interp-code">{{ locale.code }}</span>
                         <span class="interp-result">{{ renderInterp(localeData[locale.code]?.[row.key] ?? '—', row.key) }}</span>
                       </div>
+                    </div>
+                  </div>
+                  <!-- ── Plural preview ─────────────────────────────────── -->
+                  <div v-if="pluralVar(row.key)" class="detail-section detail-section--plural">
+                    <span class="detail-label"><Icon name="layers" :size="11" />Plural preview</span>
+                    <div class="plural-table-wrap">
+                      <table class="plural-table">
+                        <thead>
+                          <tr>
+                            <th class="plural-th plural-th--count">n</th>
+                            <th v-for="locale in locales" :key="locale.code" class="plural-th">
+                              {{ locale.meta?.flag ?? '' }} {{ locale.code }}
+                            </th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          <tr v-for="count in PLURAL_COUNTS" :key="count" class="plural-tr">
+                            <td class="plural-td plural-td--count">{{ count }}</td>
+                            <td v-for="locale in locales" :key="locale.code" class="plural-td">
+                              {{ renderPlural(localeData[locale.code]?.[row.key] ?? '', pluralVar(row.key)!, count) }}
+                            </td>
+                          </tr>
+                        </tbody>
+                      </table>
                     </div>
                   </div>
                 </div>
@@ -878,6 +950,8 @@ function fileUrl(file: string): string {
 .filter-btn:hover { color: #a1a1aa; border-color: #3f3f46; }
 .filter-btn.active { background: #27272a; color: #e4e4e7; border-color: #3f3f46; }
 .filter-btn--unused.active { color: #fbbf24; border-color: rgba(251,191,36,0.25); background: rgba(251,191,36,0.07); }
+.filter-btn--phantom.active { color: #f87171; border-color: rgba(248,113,113,0.25); background: rgba(248,113,113,0.07); }
+.filter-count { background: rgba(248,113,113,0.15); color: #f87171; font-size: 9px; padding: 0 4px; border-radius: 4px; }
 .filter-dot { width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; }
 .dot--all { background: #3f3f46; } .dot--missing { background: #fb923c; } .dot--complete { background: #4ade80; }
 .filter-btn.active .dot--all { background: #71717a; }
@@ -1062,7 +1136,14 @@ td.value-cell.is-dup .value-text   { color: #a78bfa; }
 tr.detail-row td { padding: 0; border-bottom: 1px solid #27272a; background: #0f0f11; cursor: default; }
 .detail-inner { padding: 10px 14px 12px 26px; display: flex; flex-direction: column; gap: 10px; }
 .detail-section { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
-.detail-section--note, .detail-section--interp { border-top: 1px solid #1c1c1f; padding-top: 8px; }
+.detail-section--note, .detail-section--interp, .detail-section--plural { border-top: 1px solid #1c1c1f; padding-top: 8px; }
+.plural-table-wrap { overflow-x: auto; }
+.plural-table { border-collapse: collapse; font-size: 11px; width: 100%; }
+.plural-th { padding: 3px 10px; text-align: left; font-size: 10px; font-weight: 600; color: #52525b; text-transform: uppercase; letter-spacing: 0.04em; border-bottom: 1px solid #27272a; white-space: nowrap; }
+.plural-th--count { color: #3f3f46; width: 32px; }
+.plural-tr:nth-child(even) .plural-td { background: #111113; }
+.plural-td { padding: 4px 10px; color: #a1a1aa; border-bottom: 1px solid #1c1c1f; }
+.plural-td--count { font-family: 'SF Mono','Fira Code',monospace; color: #818cf8; font-size: 10px; text-align: center; }
 .detail-label { display: flex; align-items: center; gap: 5px; font-size: 11px; color: #3f3f46; width: 100%; margin-bottom: 2px; }
 .file-chip {
   display: inline-flex; align-items: center; gap: 5px;
