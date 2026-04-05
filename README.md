@@ -894,16 +894,61 @@ vue-i18n-kit check --default en --fail
 
 ---
 
-## Locale Editor UI (alpha version)
+## Locale Editor UI
 
 A browser-based editor for viewing and editing locale files directly in your project — no external service, runs entirely on your machine.
 
 ### What it does
 
-- **Table view** — all translation keys as rows, one column per locale
-- **Inline editing** — click any translation value to edit it in place; save with ✓ or Enter, cancel with ✕ or Escape; changes are written immediately to the locale JSON file on disk
-- **Usage map** — click any key in the left column to see which source files use it (`t()`, `tm()`, `$t()` calls are scanned automatically)
-- **Missing key detection** — cells with no translation are highlighted
+#### Dashboard
+
+- **Coverage overview** — overall coverage bar, per-locale progress with missing key count
+- **Namespace cards** — coverage percentage per namespace; click any card to jump straight to that namespace in the editor
+- **Duplicate values** — keys where all locales share the same non-empty value (likely untranslated)
+- **Unused keys** — keys with no `t()`/`tm()`/`$t()` usages found in source files
+
+#### Editor table
+
+- **Inline editing** — click any cell to edit in place; multiline textarea auto-resizes; save with Enter or ✓, cancel with Escape or ✕; changes are written immediately to locale JSON on disk
+- **Namespace groups** — keys grouped by dotted prefix (`auth.form.label` → group `auth` → sub-group `form` → key `label`); groups collapse/expand; arbitrary nesting depth is supported
+- **Group operations** — on any group row: add a nested sub-group, add a key, rename the namespace (renames all keys), delete the group and all its keys
+- **Inline key actions** — rename, duplicate, add/edit note, delete — appear next to the key label on hover
+- **Batch select & delete** — row checkboxes + bulk delete bar
+- **Usage map** — expand any key row to see which source files reference it; clickable file chips open the file in your IDE (VS Code, Cursor, WebStorm, PhpStorm, IntelliJ)
+- **Cell validation** — inline warnings for: placeholder mismatch `{var}`, HTML tag mismatch, ICU syntax errors (unbalanced braces, missing `other {}`), length > 2.5× reference
+- **Empty vs missing** — visual distinction between a key that is absent (`— missing —`) and one intentionally set to an empty string (`— empty —`)
+- **Duplicate badge** — `dup` badge on keys where all locales have identical non-empty values
+- **Copy from reference** — one-click button on missing/empty cells to copy the value from the reference locale
+- **Interpolation preview** — expand a key row to fill in `{variable}` values and see the rendered output per locale
+- **Density toggle** — compact / default / relaxed row height
+- **Keyboard navigation** — arrow keys move between cells; Enter starts editing; Space toggles selection
+
+#### Toolbar & header
+
+| Feature | Shortcut | Description |
+|---|---|---|
+| Quick Open | `Ctrl+P` | Fuzzy-search all keys by name; jump instantly |
+| Find & Replace | `Ctrl+H` | Search values across all or a specific locale, preview and apply replacements |
+| Undo | `Ctrl+Z` | Undo the last saved change (up to 100 steps) |
+| Export CSV | — | Download all translations as a CSV file |
+| Import CSV | — | Upload a CSV; preview diff before applying |
+| Sort keys | — | Sort all keys alphabetically in every locale file |
+| Translate missing | — | Auto-translate missing values via LibreTranslate (self-hosted or public API) |
+| Shortcut help | `?` | Show keyboard shortcut cheatsheet |
+
+#### Settings (gear icon)
+
+- **Reference locale** — used as baseline for validation and copy-from-reference; persisted to `localStorage`
+- **IDE scheme** — choose VS Code, Cursor, WebStorm, PhpStorm or IntelliJ for file-chip links
+- **LibreTranslate URL & API key** — configure the translation endpoint
+
+#### Live reload
+
+The editor connects to the server via SSE. When a locale file changes on disk (e.g. after a `git pull` or a manual edit), the affected locale reloads automatically in the browser without a full page refresh. A green dot in the header indicates the connection is active.
+
+#### Git status
+
+Locale column headers are highlighted when the corresponding JSON file has uncommitted changes (`git status --porcelain`).
 
 ### Setup
 
