@@ -1,6 +1,6 @@
 {
   "name": "vue-i18n-kit",
-  "version": "0.1.10",
+  "version": "0.1.2",
   "description": "Vue 3 localization plugin with lazy loading, composables, CLI, and Vite integration",
   "main": "./dist/index.js",
   "module": "./dist/index.mjs",
@@ -28,6 +28,7 @@
     "prebuild": "node -e \"require('fs').rmSync('dist', { recursive: true, force: true })\"",
     "build": "tsup && vite build --config vite.config.ui.mts",
     "dev": "tsup --watch",
+    "dev:ui": "vite dev --config vite.config.ui.mts",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
@@ -65,5 +66,8 @@
     "vite-plugin",
     "cli"
   ],
-  "license": "MIT"
+  "license": "MIT",
+  "dependencies": {
+    "@clack/prompts": "^1.2.0"
+  }
 }

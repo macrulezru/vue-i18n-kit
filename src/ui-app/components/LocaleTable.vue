@@ -1,5 +1,8 @@
 <script setup lang="ts">
-import { ref, computed, nextTick } from 'vue'
+import { ref, computed, nextTick, watch } from 'vue'
+import Icon from './Icon.vue'
+import Checkbox from './Checkbox.vue'
+import { usePersisted } from '../composables/usePersisted'
 import type { LocaleInfo, LocaleData, LocaleEntries } from '../api'
 
 const props = defineProps<{
@@ -7,221 +10,682 @@ const props = defineProps<{
   locales: LocaleInfo[]
   localeData: LocaleData
   entries: LocaleEntries
+  referenceLocale: string
+  notes: Record<string, string>
+  modifiedLocales: string[]
+  projectCwd?: string
+  ideScheme?: string
+  externalSearch?: string
+  duplicateKeys?: string[]
 }>()
 
 const emit = defineEmits<{
-  save: [code: string, key: string, value: string]
+  save:              [code: string, key: string, value: string]
+  deleteKey:         [key: string]
+  deleteKeys:        [keys: string[]]
+  renameKey:         [oldKey: string, newKey: string]
+  duplicateKey:      [key: string, newKey: string]
+  saveNote:          [key: string, note: string]
+  createKeyInGroup:  [prefix: string]
+  renameGroup:       [oldPrefix: string, newPrefix: string]
 }>()
 
-// ── Tree structure ────────────────────────────────────────────────────────────
+// ── Persisted state ───────────────────────────────────────────────────────────
 
-interface ItemRow {
-  type: 'item'
-  key: string     // full key path, e.g. "greeting"
-  label: string   // display name, e.g. "greeting"
-  indent: boolean
+const density = usePersisted<'compact' | 'default' | 'relaxed'>('i18nkit:density', 'default')
+
+// ── Toolbar ───────────────────────────────────────────────────────────────────
+
+const search         = ref('')
+const statusFilter   = ref<'all' | 'missing' | 'complete'>('all')
+const showUnusedOnly = ref(false)
+
+// External search override (e.g. from namespace click in Dashboard)
+watch(() => props.externalSearch, val => { if (val != null) search.value = val }, { immediate: true })
+
+// ── Collapse ──────────────────────────────────────────────────────────────────
+
+const collapsed = ref<Record<string, boolean>>({})
+function toggleGroup(prefix: string) { collapsed.value = { ...collapsed.value, [prefix]: !collapsed.value[prefix] } }
+function collapseAll() {
+  collapsed.value = Object.fromEntries(collectAllPrefixes(filteredKeys.value).map(p => [p, true]))
+}
+function expandAll() { collapsed.value = {} }
+
+// ── Validation ────────────────────────────────────────────────────────────────
+
+function extractPlaceholders(str: string): string[] {
+  return [...str.matchAll(/\{(\w+)\}/g)].map(m => m[1]).sort()
+}
+function extractHtmlTags(str: string): string[] {
+  return [...str.matchAll(/<\/?([a-zA-Z][a-zA-Z0-9]*)[^>]*>/g)].map(m => m[0]).sort()
 }
 
-interface GroupRow {
+function hasPlaceholderMismatch(key: string, code: string): boolean {
+  if (code === props.referenceLocale) return false
+  const value = props.localeData[code]?.[key]; const refVal = props.localeData[props.referenceLocale]?.[key]
+  if (!value || !refVal) return false
+  return JSON.stringify(extractPlaceholders(refVal)) !== JSON.stringify(extractPlaceholders(value))
+}
+function hasTagMismatch(key: string, code: string): boolean {
+  if (code === props.referenceLocale) return false
+  const value = props.localeData[code]?.[key]; const refVal = props.localeData[props.referenceLocale]?.[key]
+  if (!value || !refVal) return false
+  const refTags = extractHtmlTags(refVal); if (!refTags.length) return false
+  return JSON.stringify(refTags) !== JSON.stringify(extractHtmlTags(value))
+}
+function getIcuError(value: string): string | null {
+  if (!value) return null
+  const opens = (value.match(/\{/g) ?? []).length; const closes = (value.match(/\}/g) ?? []).length
+  if (opens !== closes) return 'Unbalanced braces'
+  if (/\{[^}]+,\s*(plural|select)/.test(value) && !value.includes('other {')) return 'Missing "other" case'
+  return null
+}
+function lengthRatio(key: string, code: string): number {
+  if (code === props.referenceLocale) return 1
+  const value = props.localeData[code]?.[key]; const refVal = props.localeData[props.referenceLocale]?.[key]
+  if (!value || !refVal || !refVal.length) return 1
+  return value.length / refVal.length
+}
+
+function isMissing(key: string, code: string): boolean { return props.localeData[code]?.[key] === undefined }
+function isEmpty(key: string, code: string): boolean    { return props.localeData[code]?.[key] === '' }
+
+// ── Row building (recursive tree) ────────────────────────────────────────────
+
+interface RenderGroup {
   type: 'group'
-  name: string    // first segment, e.g. "buttons"
-  children: ItemRow[]
+  prefix: string    // full dotted path, e.g. 'auth.form'
+  name: string      // last segment, e.g. 'form'
+  depth: number
+  keyCount: number  // total descendant key count
+  isEmpty?: boolean // virtual group — no real keys yet
 }
+interface RenderItem {
+  type: 'item'
+  key: string
+  label: string   // last segment
+  depth: number
+}
+type RenderRow = RenderGroup | RenderItem
 
-type TableRow = GroupRow | ItemRow
+// Virtual groups: exist in UI only, no keys yet (cleared on reload)
+const virtualGroups = ref<string[]>([])
 
-const tableRows = computed<TableRow[]>(() => {
-  const rows: TableRow[] = []
+// Build flat render list respecting collapsed state (recursive)
+function buildRenderRows(keys: string[], prefix: string, depth: number): RenderRow[] {
+  const rows: RenderRow[] = []
   const seenGroups = new Set<string>()
 
-  for (const key of props.keys) {
-    const dotIdx = key.indexOf('.')
-    if (dotIdx === -1) {
-      rows.push({ type: 'item', key, label: key, indent: false })
+  for (const key of keys) {
+    const relative = prefix ? key.slice(prefix.length + 1) : key
+    const dot = relative.indexOf('.')
+    if (dot === -1) {
+      rows.push({ type: 'item', key, label: relative, depth })
     } else {
-      const prefix = key.slice(0, dotIdx)
-      if (!seenGroups.has(prefix)) {
-        seenGroups.add(prefix)
-        const children = props.keys
-          .filter(k => k.startsWith(prefix + '.'))
-          .map(k => ({ type: 'item' as const, key: k, label: k.slice(prefix.length + 1), indent: true }))
-        rows.push({ type: 'group', name: prefix, children })
+      const seg = relative.slice(0, dot)
+      const fullPrefix = prefix ? `${prefix}.${seg}` : seg
+      if (!seenGroups.has(fullPrefix)) {
+        seenGroups.add(fullPrefix)
+        const childKeys = keys.filter(k => k.startsWith(fullPrefix + '.'))
+        rows.push({ type: 'group', prefix: fullPrefix, name: seg, depth, keyCount: childKeys.length })
+        if (!collapsed.value[fullPrefix]) {
+          rows.push(...buildRenderRows(childKeys, fullPrefix, depth + 1))
+        }
       }
     }
   }
 
+  // Inject virtual groups at this level (those whose parent prefix matches)
+  for (const vg of virtualGroups.value) {
+    if (seenGroups.has(vg)) continue
+    const parentOfVg = vg.includes('.') ? vg.slice(0, vg.lastIndexOf('.')) : ''
+    if (parentOfVg !== prefix) continue
+    // Only show if no real keys exist under this prefix
+    if (keys.some(k => k.startsWith(vg + '.'))) continue
+    seenGroups.add(vg)
+    const name = vg.slice(vg.lastIndexOf('.') + 1)
+    rows.push({ type: 'group', prefix: vg, name, depth, keyCount: 0, isEmpty: true })
+    // Show empty group body only when not collapsed
+    if (!collapsed.value[vg]) {
+      // nothing to recurse — no keys
+    }
+  }
+
   return rows
-})
-
-// ── Collapse state ────────────────────────────────────────────────────────────
-
-const collapsed = ref<Record<string, boolean>>({})
-
-function toggleGroup(name: string) {
-  collapsed.value = { ...collapsed.value, [name]: !collapsed.value[name] }
 }
 
-// ── Detail row (used in) ──────────────────────────────────────────────────────
+function keyPassesFilters(key: string): boolean {
+  const q = search.value.toLowerCase()
+  if (q) {
+    const inKey    = key.toLowerCase().includes(q)
+    const inValues = props.locales.some(l => (props.localeData[l.code]?.[key] ?? '').toLowerCase().includes(q))
+    const inNote   = (props.notes[key] ?? '').toLowerCase().includes(q)
+    if (!inKey && !inValues && !inNote) return false
+  }
+  if (showUnusedOnly.value && props.entries[key]?.length) return false
+  if (statusFilter.value === 'missing'  && !props.locales.some(l => !props.localeData[l.code]?.[key])) return false
+  if (statusFilter.value === 'complete' && props.locales.some(l => !props.localeData[l.code]?.[key]))  return false
+  return true
+}
+
+const filteredKeys = computed(() => props.keys.filter(keyPassesFilters))
+const renderRows   = computed<RenderRow[]>(() => buildRenderRows(filteredKeys.value, '', 0))
+const matchCount   = computed(() => filteredKeys.value.length)
+const flatItems    = computed(() =>
+  renderRows.value.filter(r => r.type === 'item').map(r => (r as RenderItem).key)
+)
+
+// Collect ALL group prefixes regardless of collapsed state (for collapse-all)
+function collectAllPrefixes(keys: string[], prefix = ''): string[] {
+  const result: string[] = []
+  const seen = new Set<string>()
+  for (const key of keys) {
+    const rel = prefix ? key.slice(prefix.length + 1) : key
+    const dot = rel.indexOf('.')
+    if (dot !== -1) {
+      const seg = rel.slice(0, dot)
+      const full = prefix ? `${prefix}.${seg}` : seg
+      if (!seen.has(full)) {
+        seen.add(full)
+        result.push(full)
+        result.push(...collectAllPrefixes(keys.filter(k => k.startsWith(full + '.')), full))
+      }
+    }
+  }
+  return result
+}
+
+// ── Batch select ──────────────────────────────────────────────────────────────
+
+const selectedKeys = ref<Set<string>>(new Set())
+function toggleSelect(key: string) {
+  const s = new Set(selectedKeys.value)
+  if (s.has(key)) s.delete(key); else s.add(key)
+  selectedKeys.value = s
+}
+function toggleSelectAll() {
+  if (selectedKeys.value.size === filteredKeys.value.length) selectedKeys.value = new Set()
+  else selectedKeys.value = new Set(filteredKeys.value)
+}
+function clearSelection() { selectedKeys.value = new Set() }
+
+const allVisibleSelected = computed(() =>
+  filteredKeys.value.length > 0 && filteredKeys.value.every(k => selectedKeys.value.has(k))
+)
+const someVisibleSelected = computed(() =>
+  filteredKeys.value.some(k => selectedKeys.value.has(k))
+)
+
+function bulkDelete() {
+  emit('deleteKeys', [...selectedKeys.value])
+  selectedKeys.value = new Set()
+}
+
+// ── Keyboard navigation ───────────────────────────────────────────────────────
+
+const tableWrapEl = ref<HTMLElement | null>(null)
+const kbRow = ref(-1)
+const kbCol = ref(0)
+
+function handleTableKeydown(e: KeyboardEvent) {
+  if (editingCell.value) return
+  if (e.key === 'ArrowDown')  { e.preventDefault(); kbRow.value = Math.min(kbRow.value + 1, flatItems.value.length - 1) }
+  else if (e.key === 'ArrowUp')   { e.preventDefault(); kbRow.value = Math.max(kbRow.value - 1, 0) }
+  else if (e.key === 'ArrowRight') { e.preventDefault(); kbCol.value = Math.min(kbCol.value + 1, props.locales.length) }
+  else if (e.key === 'ArrowLeft')  { e.preventDefault(); kbCol.value = Math.max(kbCol.value - 1, 0) }
+  else if (e.key === 'Enter' && kbRow.value >= 0) {
+    e.preventDefault()
+    const key = flatItems.value[kbRow.value]
+    if (kbCol.value === 0) toggleKey(key)
+    else { const l = props.locales[kbCol.value - 1]; if (l) startEdit(key, l.code, props.localeData[l.code]?.[key] ?? '') }
+  }
+  else if (e.key === 'Escape') { kbRow.value = -1; kbCol.value = 0 }
+  else if (e.key === ' ' && kbRow.value >= 0) { e.preventDefault(); toggleSelect(flatItems.value[kbRow.value]) }
+}
+function isFocusedCell(key: string, col: number) { return flatItems.value[kbRow.value] === key && kbCol.value === col }
+
+// ── Detail row ────────────────────────────────────────────────────────────────
 
 const selectedKey = ref<string | null>(null)
-
-function toggleKey(key: string) {
-  selectedKey.value = selectedKey.value === key ? null : key
-}
+function toggleKey(key: string) { selectedKey.value = selectedKey.value === key ? null : key }
 
 // ── Inline editing ────────────────────────────────────────────────────────────
 
-const editingCell = ref<{ key: string; code: string } | null>(null)
+const editingCell  = ref<{ key: string; code: string } | null>(null)
 const editingValue = ref('')
-const editInputEl = ref<HTMLInputElement | null>(null)
+const editInputEl  = ref<HTMLTextAreaElement | HTMLTextAreaElement[] | null>(null)
+
+function autoResize(el: HTMLTextAreaElement) { el.style.height = 'auto'; el.style.height = Math.min(el.scrollHeight, 200) + 'px' }
+
+function getEditEl(): HTMLTextAreaElement | null {
+  const v = editInputEl.value
+  if (!v) return null
+  return Array.isArray(v) ? (v[0] ?? null) : v
+}
 
 function startEdit(key: string, code: string, currentValue: string) {
-  editingCell.value = { key, code }
-  editingValue.value = currentValue
-  nextTick(() => editInputEl.value?.focus())
+  editingCell.value = { key, code }; editingValue.value = currentValue
+  nextTick(() => { const el = getEditEl(); if (el) { el.focus(); autoResize(el) } })
 }
-
-function cancelEdit() {
-  editingCell.value = null
-  editingValue.value = ''
-}
-
+function cancelEdit() { editingCell.value = null; editingValue.value = '' }
 function confirmEdit() {
   if (!editingCell.value) return
   emit('save', editingCell.value.code, editingCell.value.key, editingValue.value)
-  editingCell.value = null
-  editingValue.value = ''
+  editingCell.value = null; editingValue.value = ''
+}
+function onEditKeydown(e: KeyboardEvent) {
+  if (e.key === 'Escape') { e.preventDefault(); cancelEdit() }
+  else if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); confirmEdit() }
+}
+function isEditing(key: string, code: string) { return editingCell.value?.key === key && editingCell.value?.code === code }
+
+// ── Copy from reference ───────────────────────────────────────────────────────
+
+function copyFromRef(key: string, code: string) {
+  const refVal = props.localeData[props.referenceLocale]?.[key] ?? ''
+  startEdit(key, code, refVal)
 }
 
-function isEditing(key: string, code: string) {
-  return editingCell.value?.key === key && editingCell.value?.code === code
+// ── Interpolation preview ─────────────────────────────────────────────────────
+
+const interpValues = ref<Record<string, string>>({})
+
+function placeholderVars(key: string): string[] {
+  const allVals = props.locales.map(l => props.localeData[l.code]?.[key] ?? '').join(' ')
+  return [...new Set([...allVals.matchAll(/\{(\w+)\}/g)].map(m => m[1]))]
+}
+function renderInterp(str: string, key: string): string {
+  return str.replace(/\{(\w+)\}/g, (_, v) => interpValues.value[`${key}:${v}`] ?? `{${v}}`)
 }
 
-// ── Locale display helpers ────────────────────────────────────────────────────
+// ── Jump to key ───────────────────────────────────────────────────────────────
 
-function localeName(locale: LocaleInfo): string {
-  return (locale.meta?.display as string | undefined) ?? locale.code
+function jumpToKey(key: string) {
+  const dot = key.indexOf('.')
+  if (dot !== -1) collapsed.value = { ...collapsed.value, [key.slice(0, dot)]: false }
+  nextTick(() => {
+    const idx = flatItems.value.indexOf(key)
+    if (idx !== -1) { kbRow.value = idx; kbCol.value = 0; selectedKey.value = key }
+    const el = tableWrapEl.value?.querySelector(`[data-key="${CSS.escape(key)}"]`) as HTMLElement | null
+    el?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+  })
 }
-function localeFlag(locale: LocaleInfo): string | undefined {
-  return locale.meta?.flag as string | undefined
+defineExpose({ jumpToKey })
+
+// ── Copy locale JSON ──────────────────────────────────────────────────────────
+
+const copiedLocale = ref<string | null>(null)
+async function copyLocaleJson(code: string) {
+  const nested: Record<string, unknown> = {}
+  for (const [k, v] of Object.entries(props.localeData[code] ?? {})) {
+    const parts = k.split('.'); let cur = nested
+    for (let i = 0; i < parts.length - 1; i++) { if (typeof cur[parts[i]] !== 'object') cur[parts[i]] = {}; cur = cur[parts[i]] as Record<string, unknown> }
+    cur[parts[parts.length - 1]] = v
+  }
+  await navigator.clipboard.writeText(JSON.stringify(nested, null, 2))
+  copiedLocale.value = code; setTimeout(() => { copiedLocale.value = null }, 1500)
+}
+
+// ── Rename / Duplicate / Delete / Note ───────────────────────────────────────
+
+const renamingKey = ref<string | null>(null); const renameTarget = ref(''); const renameError = ref('')
+function openRename(key: string) { renamingKey.value = key; renameTarget.value = key; renameError.value = '' }
+function closeRename() { renamingKey.value = null }
+function submitRename() {
+  const nk = renameTarget.value.trim()
+  if (!nk || nk === renamingKey.value) { closeRename(); return }
+  if (!/^[a-zA-Z0-9_][\w.]*$/.test(nk)) { renameError.value = 'Invalid key format.'; return }
+  if (props.keys.includes(nk)) { renameError.value = `Key "${nk}" already exists.`; return }
+  emit('renameKey', renamingKey.value!, nk); closeRename()
+}
+
+const duplicatingKey = ref<string | null>(null); const duplicateTarget = ref(''); const duplicateError = ref('')
+function openDuplicate(key: string) { duplicatingKey.value = key; duplicateTarget.value = key + '_copy'; duplicateError.value = '' }
+function closeDuplicate() { duplicatingKey.value = null }
+function submitDuplicate() {
+  const nk = duplicateTarget.value.trim()
+  if (!nk) { closeDuplicate(); return }
+  if (!/^[a-zA-Z0-9_][\w.]*$/.test(nk)) { duplicateError.value = 'Invalid key format.'; return }
+  if (props.keys.includes(nk)) { duplicateError.value = `Key "${nk}" already exists.`; return }
+  emit('duplicateKey', duplicatingKey.value!, nk); closeDuplicate()
+}
+
+const pendingDelete = ref<string | null>(null)
+function requestDelete(key: string) { pendingDelete.value = key }
+function cancelDelete() { pendingDelete.value = null }
+function confirmDelete() { if (pendingDelete.value) emit('deleteKey', pendingDelete.value); pendingDelete.value = null }
+
+// ── Group operations ──────────────────────────────────────────────────────────
+
+const renamingGroup   = ref<string | null>(null)
+const renameGroupTarget = ref('')
+const renameGroupError  = ref('')
+
+function openRenameGroup(prefix: string) {
+  renamingGroup.value   = prefix
+  renameGroupTarget.value = prefix
+  renameGroupError.value  = ''
+}
+function closeRenameGroup() { renamingGroup.value = null }
+function submitRenameGroup() {
+  const np = renameGroupTarget.value.trim()
+  if (!np || np === renamingGroup.value) { closeRenameGroup(); return }
+  if (!/^[a-zA-Z0-9_]\w*$/.test(np)) { renameGroupError.value = 'Only letters, numbers, underscores.'; return }
+  const conflict = props.keys.some(k => k.startsWith(np + '.') && !k.startsWith(renamingGroup.value! + '.'))
+  if (conflict) { renameGroupError.value = `Namespace "${np}" already exists.`; return }
+  emit('renameGroup', renamingGroup.value!, np)
+  closeRenameGroup()
+}
+
+const pendingDeleteGroup = ref<string | null>(null)
+function groupChildren(prefix: string): string[] {
+  return props.keys.filter(k => k.startsWith(prefix + '.'))
+}
+function requestDeleteGroup(prefix: string) {
+  // Virtual (empty) group — remove immediately, no confirmation needed
+  if (virtualGroups.value.includes(prefix) && !groupChildren(prefix).length) {
+    virtualGroups.value = virtualGroups.value.filter(g => g !== prefix)
+    return
+  }
+  pendingDeleteGroup.value = prefix
+}
+function cancelDeleteGroup() { pendingDeleteGroup.value = null }
+function confirmDeleteGroup() {
+  if (pendingDeleteGroup.value) {
+    emit('deleteKeys', groupChildren(pendingDeleteGroup.value))
+    // Also clean up virtual state if it was a mixed group
+    virtualGroups.value = virtualGroups.value.filter(g => !g.startsWith(pendingDeleteGroup.value! + '.') && g !== pendingDeleteGroup.value)
+  }
+  pendingDeleteGroup.value = null
+}
+
+const editingNoteKey = ref<string | null>(null); const editingNoteValue = ref('')
+function openNote(key: string) { editingNoteKey.value = key; editingNoteValue.value = props.notes[key] ?? '' }
+function closeNote() { editingNoteKey.value = null }
+function submitNote() { emit('saveNote', editingNoteKey.value!, editingNoteValue.value.trim()); closeNote() }
+
+// ── New group dialog ──────────────────────────────────────────────────────────
+
+const showNewGroup   = ref(false)
+const newGroupParent = ref('')
+const newGroupName   = ref('')
+const newGroupError  = ref('')
+
+const newGroupFullPrefix = computed(() =>
+  [newGroupParent.value, newGroupName.value.trim()].filter(Boolean).join('.')
+)
+
+function openNewGroup(parentPrefix = '') {
+  newGroupParent.value = parentPrefix
+  newGroupName.value   = ''
+  newGroupError.value  = ''
+  showNewGroup.value   = true
+}
+function closeNewGroup() { showNewGroup.value = false }
+function submitNewGroup() {
+  const seg = newGroupName.value.trim()
+  if (!seg) { newGroupError.value = 'Enter a group name.'; return }
+  if (!/^[a-zA-Z0-9_]\w*$/.test(seg)) { newGroupError.value = 'Only letters, numbers, underscores.'; return }
+  const full = newGroupFullPrefix.value
+  if (virtualGroups.value.includes(full) || props.keys.some(k => k.startsWith(full + '.'))) {
+    newGroupError.value = `Group "${full}" already exists.`; return
+  }
+  virtualGroups.value = [...virtualGroups.value, full]
+  closeNewGroup()
+}
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+function localeName(l: LocaleInfo) { return (l.meta?.display as string | undefined) ?? l.code }
+function localeFlag(l: LocaleInfo) { return l.meta?.flag as string | undefined }
+
+function cellClass(key: string, code: string) {
+  const editing  = isEditing(key, code)
+  const missing  = !editing && isMissing(key, code)
+  const empty    = !editing && !missing && isEmpty(key, code)
+  const mismatch = !editing && !missing && !empty && hasPlaceholderMismatch(key, code)
+  const tagWarn  = !editing && !missing && !empty && hasTagMismatch(key, code)
+  const icuErr   = !editing && !missing && !empty && !!getIcuError(props.localeData[code]?.[key] ?? '')
+  const lenWarn  = !editing && !missing && !empty && lengthRatio(key, code) > 2.5
+  const unused   = !props.entries[key]?.length
+  const isDup    = props.duplicateKeys?.includes(key) ?? false
+  return { missing, empty, editing, mismatch, 'tag-warn': tagWarn, 'icu-err': icuErr, 'len-warn': lenWarn, 'key-unused': unused && !missing, 'is-dup': isDup && !missing && !empty }
+}
+
+function cellWarningIcon(key: string, code: string): string | null {
+  if (isMissing(key, code) || isEmpty(key, code)) return null
+  if (hasPlaceholderMismatch(key, code) || hasTagMismatch(key, code)) return 'warning'
+  if (getIcuError(props.localeData[code]?.[key] ?? '')) return 'alertTriangle'
+  if (lengthRatio(key, code) > 2.5) return 'info'
+  return null
+}
+function cellWarningTitle(key: string, code: string): string | undefined {
+  if (hasPlaceholderMismatch(key, code)) return 'Placeholder mismatch vs reference'
+  if (hasTagMismatch(key, code)) return 'HTML tag mismatch vs reference'
+  const icu = getIcuError(props.localeData[code]?.[key] ?? ''); if (icu) return `ICU error: ${icu}`
+  if (lengthRatio(key, code) > 2.5) return `${Math.round(lengthRatio(key, code) * 10) / 10}× longer than reference`
+  return undefined
+}
+
+function fileUrl(file: string): string {
+  const abs = props.projectCwd ? `${props.projectCwd}/${file}`.replace(/\\/g, '/') : file
+  switch (props.ideScheme) {
+    case 'cursor':    return `cursor://file/${abs}`
+    case 'webstorm':  return `webstorm://open?file=${encodeURIComponent(abs)}`
+    case 'phpstorm':  return `phpstorm://open?file=${encodeURIComponent(abs)}`
+    case 'idea':      return `idea://open?file=${encodeURIComponent(abs)}`
+    default:          return `vscode://file/${abs}`
+  }
 }
 </script>
 
 <template>
-  <div class="table-wrap">
-    <table>
+  <!-- ── Batch toolbar ─────────────────────────────────────────────────────── -->
+  <div v-if="selectedKeys.size > 0" class="bulk-bar">
+    <Icon name="check" :size="12" class="bulk-check-icon" />
+    <span class="bulk-count">{{ selectedKeys.size }} selected</span>
+    <button class="bulk-btn bulk-btn--danger" @click="bulkDelete">
+      <Icon name="trash" :size="12" />Delete {{ selectedKeys.size }}
+    </button>
+    <button class="bulk-btn" @click="clearSelection">
+      <Icon name="close" :size="11" />Deselect
+    </button>
+  </div>
+
+  <!-- ── Toolbar ──────────────────────────────────────────────────────────── -->
+  <div class="toolbar">
+    <div class="search-wrap">
+      <Icon name="search" :size="13" class="search-icon" />
+      <input v-model="search" class="search-input" placeholder="Search keys, values, notes…" />
+      <button v-if="search" class="clear-btn" @click="search = ''"><Icon name="close" :size="10" /></button>
+    </div>
+
+    <div class="filter-group">
+      <button v-for="opt in (['all','missing','complete'] as const)" :key="opt"
+        class="filter-btn" :class="{ active: statusFilter === opt }" @click="statusFilter = opt">
+        <span class="filter-dot" :class="'dot--' + opt" />{{ opt }}
+      </button>
+    </div>
+
+    <button class="filter-btn filter-btn--unused" :class="{ active: showUnusedOnly }" @click="showUnusedOnly = !showUnusedOnly">
+      <Icon name="zap" :size="11" />unused
+    </button>
+
+    <div class="toolbar-sep" />
+
+    <button class="toolbar-icon-btn" title="Expand all"  @click="expandAll"><Icon name="chevronDown" :size="13" /></button>
+    <button class="toolbar-icon-btn" title="Collapse all" @click="collapseAll"><Icon name="chevronRight" :size="13" /></button>
+
+    <div class="toolbar-sep" />
+
+    <button class="toolbar-new-group-btn" title="New group / namespace" @click="openNewGroup()">
+      <Icon name="layers" :size="12" />New group
+    </button>
+
+    <div class="toolbar-sep" />
+
+    <div class="density-group">
+      <button v-for="d in (['compact','default','relaxed'] as const)" :key="d"
+        class="density-btn" :class="{ active: density === d }" :title="d" @click="density = d">
+        <span class="density-bar" /><span class="density-bar" /><span v-if="d !== 'compact'" class="density-bar" />
+      </button>
+    </div>
+
+    <span class="result-count">
+      <span class="result-match">{{ matchCount }}</span><span class="result-sep">/</span>{{ keys.length }}
+    </span>
+  </div>
+
+  <!-- ── Table ────────────────────────────────────────────────────────────── -->
+  <div ref="tableWrapEl" class="table-wrap" :class="'density-' + density" tabindex="0" @keydown="handleTableKeydown">
+    <div v-if="filteredKeys.length === 0" class="empty">
+      <Icon name="filter" :size="18" class="empty-icon" /><span>No keys match the current filters.</span>
+    </div>
+
+    <table v-else>
       <thead>
         <tr>
-          <th class="col-key">Key</th>
+          <th class="col-select">
+            <Checkbox :model-value="allVisibleSelected" :indeterminate="someVisibleSelected && !allVisibleSelected" @update:model-value="toggleSelectAll" />
+          </th>
+          <th class="col-key"><div class="th-inner"><Icon name="key" :size="11" />Key</div></th>
           <th v-for="locale in locales" :key="locale.code">
             <div class="locale-header">
               <span v-if="localeFlag(locale)" class="locale-flag">{{ localeFlag(locale) }}</span>
+              <Icon v-else name="globe" :size="13" class="locale-flag-icon" />
               <span class="locale-name">{{ localeName(locale) }}</span>
-              <span class="locale-code">{{ locale.code }}</span>
+              <span class="locale-code" :class="{ 'locale-code--modified': modifiedLocales.includes(locale.code) }">
+                <Icon v-if="modifiedLocales.includes(locale.code)" name="gitBranch" :size="9" />{{ locale.code }}
+              </span>
+              <button class="copy-json-btn" :title="`Copy ${locale.code} as JSON`" @click="copyLocaleJson(locale.code)">
+                <Icon :name="copiedLocale === locale.code ? 'check' : 'copy'" :size="11" />
+              </button>
+              <span v-if="locale.code === referenceLocale" class="ref-badge">ref</span>
             </div>
           </th>
         </tr>
       </thead>
+
       <tbody>
-        <template v-for="row in tableRows" :key="row.type === 'group' ? 'g:' + row.name : 'i:' + row.key">
+        <template v-for="row in renderRows" :key="row.type === 'group' ? 'g:' + row.prefix : 'i:' + row.key">
 
-          <!-- ── Group ──────────────────────────────────────────────────── -->
-          <template v-if="row.type === 'group'">
-            <tr class="group-row" @click="toggleGroup(row.name)">
-              <td class="group-cell" :colspan="locales.length + 1">
-                <span class="chevron" :class="{ open: !collapsed[row.name] }">▶</span>
-                {{ row.name }}
-                <span class="group-count">{{ row.children.length }}</span>
-              </td>
-            </tr>
-
-            <template v-if="!collapsed[row.name]">
-              <template v-for="child in row.children" :key="child.key">
-                <tr class="data-row child-row" :class="{ 'is-open': selectedKey === child.key }">
-                  <td class="key-cell indent" @click="toggleKey(child.key)">
-                    <span class="chevron-key">▶</span>{{ child.label }}
-                  </td>
-                  <td
-                    v-for="locale in locales"
-                    :key="locale.code"
-                    class="value-cell"
-                    :class="{
-                      missing: localeData[locale.code]?.[child.key] === undefined && !isEditing(child.key, locale.code),
-                      editing: isEditing(child.key, locale.code),
-                    }"
-                  >
-                    <div v-if="isEditing(child.key, locale.code)" class="edit-wrap">
-                      <input
-                        ref="editInputEl"
-                        v-model="editingValue"
-                        class="edit-input"
-                        @keydown.enter="confirmEdit"
-                        @keydown.esc="cancelEdit"
-                      />
-                      <button class="btn-confirm" title="Save" @click="confirmEdit">✓</button>
-                      <button class="btn-cancel" title="Cancel" @click="cancelEdit">✕</button>
-                    </div>
-                    <span v-else class="value-text" @click="startEdit(child.key, locale.code, localeData[locale.code]?.[child.key] ?? '')">
-                      {{ localeData[locale.code]?.[child.key] ?? '— missing —' }}
-                    </span>
-                  </td>
-                </tr>
-
-                <tr v-if="selectedKey === child.key" class="detail-row">
-                  <td :colspan="locales.length + 1">
-                    <div class="detail-inner">
-                      <span class="detail-label">Used in</span>
-                      <template v-if="entries[child.key]?.length">
-                        <span v-for="file in entries[child.key]" :key="file" class="file-chip">📄 {{ file }}</span>
-                      </template>
-                      <span v-else class="no-usages">No usages found</span>
-                    </div>
-                  </td>
-                </tr>
-              </template>
-            </template>
-          </template>
-
-          <!-- ── Standalone item ────────────────────────────────────────── -->
-          <template v-else>
-            <tr class="data-row" :class="{ 'is-open': selectedKey === row.key }">
-              <td class="key-cell" @click="toggleKey(row.key)">
-                <span class="chevron-key">▶</span>{{ row.label }}
-              </td>
-              <td
-                v-for="locale in locales"
-                :key="locale.code"
-                class="value-cell"
-                :class="{
-                  missing: localeData[locale.code]?.[row.key] === undefined && !isEditing(row.key, locale.code),
-                  editing: isEditing(row.key, locale.code),
-                }"
-              >
-                <div v-if="isEditing(row.key, locale.code)" class="edit-wrap">
-                  <input
-                    ref="editInputEl"
-                    v-model="editingValue"
-                    class="edit-input"
-                    @keydown.enter="confirmEdit"
-                    @keydown.esc="cancelEdit"
-                  />
-                  <button class="btn-confirm" title="Save" @click="confirmEdit">✓</button>
-                  <button class="btn-cancel" title="Cancel" @click="cancelEdit">✕</button>
+          <!-- ── Group row ── -->
+          <tr v-if="row.type === 'group'" class="group-row" @click="toggleGroup(row.prefix)">
+            <td class="group-select-cell"></td>
+            <td class="group-cell" :colspan="locales.length + 1">
+              <div class="group-cell-inner" :style="{ paddingLeft: (row.depth * 16) + 'px' }">
+                <Icon :name="collapsed[row.prefix] ? 'chevronRight' : 'chevronDown'" :size="11" class="chevron-icon" />
+                <Icon name="layers" :size="11" class="group-ns-icon" />
+                <span class="group-name-text">{{ row.name }}</span>
+                <span v-if="row.isEmpty" class="group-empty-badge">empty</span>
+                <span v-else class="group-count">{{ row.keyCount }}</span>
+                <div class="group-actions" @click.stop>
+                  <button class="btn-action btn-action--group" title="Add nested group"
+                    @click.stop="openNewGroup(row.prefix)">
+                    <Icon name="layers" :size="11" />
+                  </button>
+                  <button class="btn-action btn-action--group" title="Add key to this group"
+                    @click.stop="emit('createKeyInGroup', row.prefix)">
+                    <Icon name="plus" :size="11" />
+                  </button>
+                  <button class="btn-action btn-action--group" title="Rename group"
+                    @click.stop="openRenameGroup(row.prefix)">
+                    <Icon name="edit" :size="11" />
+                  </button>
+                  <button class="btn-action btn-action--group btn-action--danger" title="Delete group and all its keys"
+                    @click.stop="requestDeleteGroup(row.prefix)">
+                    <Icon name="trash" :size="11" />
+                  </button>
                 </div>
-                <span v-else class="value-text" @click="startEdit(row.key, locale.code, localeData[locale.code]?.[row.key] ?? '')">
-                  {{ localeData[locale.code]?.[row.key] ?? '— missing —' }}
+              </div>
+            </td>
+          </tr>
+
+          <!-- ── Item row ── -->
+          <template v-else>
+            <tr class="data-row"
+              :class="{ 'is-open': selectedKey === row.key, 'kb-focused': flatItems[kbRow] === row.key, 'row-selected': selectedKeys.has(row.key) }">
+              <td class="col-select" @click.stop>
+                <Checkbox :model-value="selectedKeys.has(row.key)" @update:model-value="toggleSelect(row.key)" />
+              </td>
+              <td class="key-cell" :class="{ 'kb-focus-cell': isFocusedCell(row.key, 0) }" :data-key="row.key" @click="toggleKey(row.key)">
+                <div class="key-cell-inner" :style="{ paddingLeft: (row.depth * 16) + 'px' }">
+                  <Icon :name="selectedKey === row.key ? 'chevronDown' : 'chevronRight'" :size="10" class="chevron-key-icon" />
+                  <Icon name="key" :size="10" class="key-icon" />
+                  <span class="key-label">{{ row.label }}</span>
+                  <span v-if="notes[row.key]" class="note-indicator" :title="notes[row.key]"><Icon name="note" :size="9" /></span>
+                  <span v-if="duplicateKeys?.includes(row.key)" class="badge-dup" title="Same value in all locales"><Icon name="shuffle" :size="8" />dup</span>
+                  <span v-if="!entries[row.key]?.length" class="badge-unused"><Icon name="zap" :size="8" />unused</span>
+                  <div class="key-actions" @click.stop>
+                    <button class="btn-action" title="Rename" @click.stop="openRename(row.key)"><Icon name="edit" :size="11" /></button>
+                    <button class="btn-action" title="Duplicate" @click.stop="openDuplicate(row.key)"><Icon name="copy" :size="11" /></button>
+                    <button class="btn-action" :title="notes[row.key] ? 'Edit note' : 'Add note'" @click.stop="openNote(row.key)">
+                      <Icon name="note" :size="11" :style="{ color: notes[row.key] ? '#818cf8' : undefined }" />
+                    </button>
+                    <button class="btn-action btn-action--danger" title="Delete" @click.stop="requestDelete(row.key)"><Icon name="trash" :size="11" /></button>
+                  </div>
+                </div>
+              </td>
+              <td v-for="(locale, colIdx) in locales" :key="locale.code"
+                class="value-cell" :class="[cellClass(row.key, locale.code), { 'kb-focus-cell': isFocusedCell(row.key, colIdx + 1) }]">
+                <div v-if="isEditing(row.key, locale.code)" class="edit-wrap">
+                  <textarea ref="editInputEl" v-model="editingValue" class="edit-input" rows="1"
+                    @input="autoResize($event.target as HTMLTextAreaElement)" @keydown="onEditKeydown" />
+                  <div class="edit-btns">
+                    <button class="btn-confirm" title="Save (Enter)" @click="confirmEdit"><Icon name="check" :size="12" /></button>
+                    <button class="btn-cancel"  title="Cancel (Esc)" @click="cancelEdit"><Icon name="close" :size="11" /></button>
+                  </div>
+                </div>
+                <span v-else class="value-text" :title="cellWarningTitle(row.key, locale.code)"
+                  @click="startEdit(row.key, locale.code, localeData[locale.code]?.[row.key] ?? '')">
+                  <template v-if="isMissing(row.key, locale.code)">
+                    <span class="cell-missing">— missing —</span>
+                    <button v-if="locale.code !== referenceLocale && localeData[referenceLocale]?.[row.key]"
+                      class="copy-ref-btn" title="Copy from reference locale" @click.stop="copyFromRef(row.key, locale.code)">
+                      <Icon name="copy" :size="9" />ref
+                    </button>
+                  </template>
+                  <span v-else-if="isEmpty(row.key, locale.code)" class="cell-empty">— empty —</span>
+                  <template v-else>
+                    {{ localeData[locale.code]?.[row.key] }}
+                    <Icon v-if="cellWarningIcon(row.key, locale.code)" :name="cellWarningIcon(row.key, locale.code)!" :size="11" class="warn-icon" />
+                  </template>
                 </span>
               </td>
             </tr>
-
+            <!-- Detail row -->
             <tr v-if="selectedKey === row.key" class="detail-row">
-              <td :colspan="locales.length + 1">
-                <div class="detail-inner">
-                  <span class="detail-label">Used in</span>
-                  <template v-if="entries[row.key]?.length">
-                    <span v-for="file in entries[row.key]" :key="file" class="file-chip">📄 {{ file }}</span>
-                  </template>
-                  <span v-else class="no-usages">No usages found</span>
+              <td :colspan="locales.length + 2">
+                <div class="detail-inner" :style="{ paddingLeft: (14 + row.depth * 16) + 'px' }">
+                  <div class="detail-section">
+                    <span class="detail-label"><Icon name="eye" :size="11" />Used in</span>
+                    <template v-if="entries[row.key]?.length">
+                      <a v-for="file in entries[row.key]" :key="file" class="file-chip" :href="fileUrl(file)" target="_blank">
+                        <Icon name="code" :size="11" />{{ file }}
+                      </a>
+                    </template>
+                    <span v-else class="no-usages"><Icon name="info" :size="11" />No usages found</span>
+                  </div>
+                  <div v-if="notes[row.key]" class="detail-section detail-section--note">
+                    <span class="detail-label"><Icon name="note" :size="11" />Note</span>
+                    <span class="detail-note-text">{{ notes[row.key] }}</span>
+                  </div>
+                  <div v-if="placeholderVars(row.key).length" class="detail-section detail-section--interp">
+                    <span class="detail-label"><Icon name="wand" :size="11" />Interpolation preview</span>
+                    <div class="interp-inputs">
+                      <div v-for="v in placeholderVars(row.key)" :key="v" class="interp-field">
+                        <span class="interp-var">&#123;{{ v }}&#125;</span>
+                        <input v-model="interpValues[`${row.key}:${v}`]" class="interp-input" :placeholder="v" />
+                      </div>
+                    </div>
+                    <div class="interp-previews">
+                      <div v-for="locale in locales" :key="locale.code" class="interp-preview-row">
+                        <span class="interp-code">{{ locale.code }}</span>
+                        <span class="interp-result">{{ renderInterp(localeData[locale.code]?.[row.key] ?? '—', row.key) }}</span>
+                      </div>
+                    </div>
+                  </div>
                 </div>
               </td>
             </tr>
@@ -231,168 +695,424 @@ function localeFlag(locale: LocaleInfo): string | undefined {
       </tbody>
     </table>
   </div>
+
+  <!-- ── Dialogs ──────────────────────────────────────────────────────────── -->
+  <Teleport to="body">
+    <div v-if="pendingDelete" class="dialog-overlay" @click.self="cancelDelete">
+      <div class="dialog">
+        <div class="dialog-header"><div class="dlg-icon dlg-icon--red"><Icon name="trash" :size="14" /></div><p class="dialog-title">Delete key?</p></div>
+        <p class="dialog-key"><Icon name="key" :size="11" />{{ pendingDelete }}</p>
+        <p class="dialog-note">Removes key from all locale files. Cannot be undone.</p>
+        <div class="dialog-actions">
+          <button class="dlg-btn dlg-btn--cancel" @click="cancelDelete"><Icon name="close" :size="11" />Cancel</button>
+          <button class="dlg-btn dlg-btn--danger"  @click="confirmDelete"><Icon name="trash" :size="11" />Delete</button>
+        </div>
+      </div>
+    </div>
+
+    <div v-if="renamingKey" class="dialog-overlay" @click.self="closeRename">
+      <div class="dialog">
+        <div class="dialog-header"><div class="dlg-icon dlg-icon--indigo"><Icon name="edit" :size="14" /></div><p class="dialog-title">Rename key</p></div>
+        <p class="dialog-key"><Icon name="key" :size="11" />{{ renamingKey }}</p>
+        <label class="field-label">New key path</label>
+        <input v-model="renameTarget" class="field-input" @keydown.enter="submitRename" @keydown.esc="closeRename" />
+        <p v-if="renameError" class="field-error"><Icon name="warning" :size="11" />{{ renameError }}</p>
+        <div class="dialog-actions">
+          <button class="dlg-btn dlg-btn--cancel"  @click="closeRename"><Icon name="close" :size="11" />Cancel</button>
+          <button class="dlg-btn dlg-btn--confirm" @click="submitRename"><Icon name="check" :size="11" />Rename</button>
+        </div>
+      </div>
+    </div>
+
+    <div v-if="duplicatingKey" class="dialog-overlay" @click.self="closeDuplicate">
+      <div class="dialog">
+        <div class="dialog-header"><div class="dlg-icon dlg-icon--indigo"><Icon name="copy" :size="14" /></div><p class="dialog-title">Duplicate key</p></div>
+        <p class="dialog-key"><Icon name="key" :size="11" />{{ duplicatingKey }}</p>
+        <label class="field-label">New key path</label>
+        <input v-model="duplicateTarget" class="field-input" @keydown.enter="submitDuplicate" @keydown.esc="closeDuplicate" />
+        <p v-if="duplicateError" class="field-error"><Icon name="warning" :size="11" />{{ duplicateError }}</p>
+        <div class="dialog-actions">
+          <button class="dlg-btn dlg-btn--cancel"  @click="closeDuplicate"><Icon name="close" :size="11" />Cancel</button>
+          <button class="dlg-btn dlg-btn--confirm" @click="submitDuplicate"><Icon name="copy" :size="11" />Duplicate</button>
+        </div>
+      </div>
+    </div>
+
+    <div v-if="editingNoteKey" class="dialog-overlay" @click.self="closeNote">
+      <div class="dialog">
+        <div class="dialog-header"><div class="dlg-icon dlg-icon--indigo"><Icon name="note" :size="14" /></div><p class="dialog-title">Key note</p></div>
+        <p class="dialog-key"><Icon name="key" :size="11" />{{ editingNoteKey }}</p>
+        <label class="field-label">Note <span class="field-note">(visible to all editors)</span></label>
+        <textarea v-model="editingNoteValue" class="field-input field-textarea" rows="3" placeholder="Context, format hints, constraints…" @keydown.esc="closeNote" />
+        <div class="dialog-actions">
+          <button class="dlg-btn dlg-btn--cancel"  @click="closeNote"><Icon name="close" :size="11" />Cancel</button>
+          <button class="dlg-btn dlg-btn--confirm" @click="submitNote"><Icon name="check" :size="11" />Save note</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- New group -->
+    <div v-if="showNewGroup" class="dialog-overlay" @click.self="closeNewGroup">
+      <div class="dialog">
+        <div class="dialog-header">
+          <div class="dlg-icon dlg-icon--indigo"><Icon name="layers" :size="14" /></div>
+          <p class="dialog-title">
+            {{ newGroupParent ? `New group inside "${newGroupParent}"` : 'New group' }}
+          </p>
+        </div>
+        <p class="dialog-note">
+          The group will appear immediately. Add keys to it using the <strong>+</strong> button.
+          Empty groups are not saved to disk — they disappear on reload.
+        </p>
+
+        <label class="field-label">
+          {{ newGroupParent ? `Subgroup name (inside "${newGroupParent}")` : 'Group name' }}
+        </label>
+        <input
+          v-model="newGroupName"
+          class="field-input"
+          :placeholder="newGroupParent ? 'subgroup' : 'auth'"
+          autofocus
+          @input="newGroupError = ''"
+          @keydown.enter="submitNewGroup"
+          @keydown.esc="closeNewGroup"
+        />
+
+        <p v-if="newGroupError" class="field-error"><Icon name="warning" :size="11" />{{ newGroupError }}</p>
+
+        <div v-if="newGroupFullPrefix" class="field-hint">
+          <Icon name="layers" :size="10" />
+          Group path: <strong>{{ newGroupFullPrefix }}</strong>
+        </div>
+
+        <div class="dialog-actions">
+          <button class="dlg-btn dlg-btn--cancel" @click="closeNewGroup"><Icon name="close" :size="11" />Cancel</button>
+          <button class="dlg-btn dlg-btn--confirm" @click="submitNewGroup"><Icon name="layers" :size="11" />Create group</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Rename group -->
+    <div v-if="renamingGroup" class="dialog-overlay" @click.self="closeRenameGroup">
+      <div class="dialog">
+        <div class="dialog-header">
+          <div class="dlg-icon dlg-icon--indigo"><Icon name="edit" :size="14" /></div>
+          <p class="dialog-title">Rename namespace</p>
+        </div>
+        <p class="dialog-key"><Icon name="layers" :size="11" />{{ renamingGroup }}</p>
+        <p class="dialog-note">Renames the prefix for all <strong>{{ groupChildren(renamingGroup).length }}</strong> keys in this group.</p>
+        <label class="field-label">New namespace name</label>
+        <input v-model="renameGroupTarget" class="field-input" @keydown.enter="submitRenameGroup" @keydown.esc="closeRenameGroup" />
+        <p v-if="renameGroupError" class="field-error"><Icon name="warning" :size="11" />{{ renameGroupError }}</p>
+        <div class="dialog-actions">
+          <button class="dlg-btn dlg-btn--cancel"  @click="closeRenameGroup"><Icon name="close" :size="11" />Cancel</button>
+          <button class="dlg-btn dlg-btn--confirm" @click="submitRenameGroup"><Icon name="check" :size="11" />Rename</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Delete group -->
+    <div v-if="pendingDeleteGroup" class="dialog-overlay" @click.self="cancelDeleteGroup">
+      <div class="dialog">
+        <div class="dialog-header">
+          <div class="dlg-icon dlg-icon--red"><Icon name="trash" :size="14" /></div>
+          <p class="dialog-title">Delete namespace?</p>
+        </div>
+        <p class="dialog-key"><Icon name="layers" :size="11" />{{ pendingDeleteGroup }}</p>
+        <p class="dialog-note">
+          Deletes all <strong>{{ groupChildren(pendingDeleteGroup).length }}</strong> keys in this namespace from every locale file. Cannot be undone.
+        </p>
+        <div class="dialog-actions">
+          <button class="dlg-btn dlg-btn--cancel" @click="cancelDeleteGroup"><Icon name="close" :size="11" />Cancel</button>
+          <button class="dlg-btn dlg-btn--danger"  @click="confirmDeleteGroup"><Icon name="trash" :size="11" />Delete all</button>
+        </div>
+      </div>
+    </div>
+  </Teleport>
 </template>
 
 <style scoped>
-.table-wrap { flex: 1; overflow: auto; }
+/* ── Bulk bar ── */
+.bulk-bar {
+  display: flex; align-items: center; gap: 8px;
+  padding: 6px 14px; background: rgba(129,140,248,0.08); border-bottom: 1px solid rgba(129,140,248,0.2);
+  flex-shrink: 0;
+}
+.bulk-check-icon { color: #818cf8; }
+.bulk-count { font-size: 12px; font-weight: 600; color: #818cf8; flex: 1; }
+.bulk-btn {
+  display: flex; align-items: center; gap: 5px;
+  padding: 4px 12px; border-radius: 5px; border: 1px solid #27272a;
+  font-size: 11px; font-weight: 600; font-family: inherit; cursor: pointer;
+  background: #27272a; color: #a1a1aa; transition: background 0.12s;
+}
+.bulk-btn:hover { background: #3f3f46; }
+.bulk-btn--danger { background: rgba(239,68,68,0.12); color: #f87171; border-color: rgba(239,68,68,0.2); }
+.bulk-btn--danger:hover { background: rgba(239,68,68,0.2); }
 
+/* ── Toolbar ── */
+.toolbar {
+  display: flex; align-items: center; gap: 8px;
+  padding: 8px 14px; background: #18181b; border-bottom: 1px solid #27272a; flex-shrink: 0; flex-wrap: wrap;
+}
+.search-wrap { position: relative; display: flex; align-items: center; flex: 0 0 240px; }
+.search-icon { position: absolute; left: 9px; color: #52525b; pointer-events: none; }
+.search-input {
+  width: 100%; padding: 5px 26px 5px 28px; background: #0f0f11;
+  border: 1px solid #27272a; border-radius: 6px; color: #d4d4d8; font-size: 12px; font-family: inherit; outline: none; transition: border-color 0.15s;
+}
+.search-input:focus { border-color: #818cf8; box-shadow: 0 0 0 2px rgba(129,140,248,0.08); }
+.search-input::placeholder { color: #3f3f46; }
+.clear-btn {
+  position: absolute; right: 6px; display: flex; align-items: center; justify-content: center;
+  width: 16px; height: 16px; background: #27272a; border: none; border-radius: 3px; color: #71717a; cursor: pointer; padding: 0;
+}
+.clear-btn:hover { background: #3f3f46; color: #a1a1aa; }
+.filter-group { display: flex; gap: 2px; }
+.filter-btn {
+  display: flex; align-items: center; gap: 5px; padding: 4px 9px;
+  background: transparent; border: 1px solid #27272a; border-radius: 5px;
+  color: #52525b; font-size: 11px; font-weight: 600; font-family: inherit; cursor: pointer; white-space: nowrap;
+  transition: background 0.12s, color 0.12s, border-color 0.12s;
+}
+.filter-btn:hover { color: #a1a1aa; border-color: #3f3f46; }
+.filter-btn.active { background: #27272a; color: #e4e4e7; border-color: #3f3f46; }
+.filter-btn--unused.active { color: #fbbf24; border-color: rgba(251,191,36,0.25); background: rgba(251,191,36,0.07); }
+.filter-dot { width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; }
+.dot--all { background: #3f3f46; } .dot--missing { background: #fb923c; } .dot--complete { background: #4ade80; }
+.filter-btn.active .dot--all { background: #71717a; }
+.toolbar-sep { width: 1px; height: 16px; background: #27272a; flex-shrink: 0; }
+.toolbar-icon-btn {
+  display: flex; align-items: center; justify-content: center;
+  width: 26px; height: 26px; background: transparent; border: 1px solid #27272a; border-radius: 5px;
+  color: #52525b; cursor: pointer; transition: background 0.12s, color 0.12s;
+}
+.toolbar-icon-btn:hover { background: #27272a; color: #a1a1aa; }
+.density-group { display: flex; gap: 2px; }
+.density-btn {
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 2px; width: 24px; height: 24px; background: transparent; border: 1px solid #27272a; border-radius: 4px; cursor: pointer; padding: 4px;
+}
+.density-btn.active { background: #27272a; border-color: #3f3f46; }
+.density-bar { width: 12px; height: 1.5px; background: #3f3f46; border-radius: 1px; }
+.density-btn.active .density-bar { background: #71717a; }
+.toolbar-new-group-btn {
+  display: flex; align-items: center; gap: 5px;
+  padding: 4px 10px; border-radius: 5px; border: 1px solid rgba(129,140,248,0.25);
+  background: rgba(129,140,248,0.08); color: #818cf8;
+  font-size: 11px; font-weight: 600; font-family: inherit; cursor: pointer; white-space: nowrap;
+  transition: background 0.12s, border-color 0.12s;
+}
+.toolbar-new-group-btn:hover { background: rgba(129,140,248,0.16); border-color: rgba(129,140,248,0.4); }
+
+.result-count { margin-left: auto; font-size: 11px; color: #3f3f46; white-space: nowrap; }
+.result-match { color: #52525b; font-weight: 600; }
+.result-sep { color: #27272a; margin: 0 2px; }
+
+/* ── Table ── */
+.table-wrap { flex: 1; overflow: auto; outline: none; }
+.empty { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; padding: 60px 20px; color: #3f3f46; font-size: 13px; font-style: italic; }
+.empty-icon { color: #27272a; }
 table { width: 100%; border-collapse: collapse; }
-
 thead th {
-  position: sticky;
-  top: 0;
-  z-index: 10;
-  background: #18181b;
-  border-bottom: 1px solid #27272a;
-  padding: 10px 14px;
-  text-align: left;
-  font-size: 12px;
-  font-weight: 600;
-  color: #71717a;
-  white-space: nowrap;
+  position: sticky; top: 0; z-index: 10; background: #18181b;
+  border-bottom: 1px solid #27272a; padding: 9px 12px;
+  text-align: left; font-size: 12px; font-weight: 600; color: #71717a; white-space: nowrap;
 }
-th.col-key { width: 280px; min-width: 200px; color: #52525b; }
-
+th.col-select { width: 32px; min-width: 32px; padding: 9px 6px; }
+th.col-key { width: 260px; min-width: 160px; }
+.th-inner { display: flex; align-items: center; gap: 6px; color: #52525b; }
 .locale-header { display: flex; align-items: center; gap: 6px; }
-.locale-flag { font-size: 16px; }
+.locale-flag { font-size: 14px; line-height: 1; }
+.locale-flag-icon { color: #52525b; }
 .locale-name { font-size: 12px; color: #d4d4d8; font-weight: 600; }
-.locale-code { font-size: 11px; color: #52525b; }
+.locale-code {
+  display: inline-flex; align-items: center; gap: 3px;
+  font-size: 10px; color: #3f3f46; background: #111113; border: 1px solid #1c1c1f;
+  border-radius: 3px; padding: 1px 5px; font-family: 'SF Mono','Fira Code',monospace;
+}
+.locale-code--modified { color: #fbbf24; border-color: rgba(251,191,36,0.2); background: rgba(251,191,36,0.05); }
+.copy-json-btn { display: flex; align-items: center; justify-content: center; width: 20px; height: 20px; border: none; background: transparent; color: #3f3f46; cursor: pointer; border-radius: 3px; transition: color 0.12s, background 0.12s; }
+.copy-json-btn:hover { color: #71717a; background: #27272a; }
+.ref-badge { font-size: 9px; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase; color: #818cf8; background: rgba(129,140,248,0.1); border: 1px solid rgba(129,140,248,0.2); border-radius: 3px; padding: 1px 4px; }
 
-/* ── Group row ── */
-tr.group-row {
-  cursor: pointer;
-  user-select: none;
-}
-tr.group-row:hover .group-cell {
-  background: #1c1c1f;
-}
-.group-cell {
-  padding: 6px 14px;
-  background: #18181b;
-  border-bottom: 1px solid #27272a;
-  font-size: 11px;
-  font-weight: 700;
-  color: #52525b;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-}
-.group-count {
-  margin-left: 6px;
-  background: #27272a;
-  color: #52525b;
-  font-size: 10px;
-  padding: 1px 6px;
-  border-radius: 8px;
-  font-weight: 400;
-  letter-spacing: 0;
-  text-transform: none;
-}
+/* ── Checkbox ── */
+.col-select { padding: 0 6px; text-align: center; }
+.group-select-cell { padding: 0; }
 
-/* ── Chevrons ── */
-.chevron {
-  display: inline-block;
-  margin-right: 6px;
-  font-size: 9px;
-  color: #3f3f46;
-  transition: transform 0.15s;
-}
-.chevron.open { transform: rotate(90deg); color: #71717a; }
+/* ── Group rows ── */
+tr.group-row { cursor: pointer; user-select: none; }
+tr.group-row:hover .group-cell { background: #1c1c1f; }
+.group-cell { padding: 5px 14px; background: #18181b; border-bottom: 1px solid #27272a; }
+.group-cell-inner { display: flex; align-items: center; gap: 6px; font-size: 11px; font-weight: 700; color: #52525b; letter-spacing: 0.05em; text-transform: uppercase; }
+.chevron-icon { color: #3f3f46; transition: color 0.12s; }
+tr.group-row:hover .chevron-icon { color: #71717a; }
+.group-ns-icon { color: #3f3f46; }
+.group-count { background: #27272a; color: #52525b; font-size: 10px; padding: 1px 6px; border-radius: 8px; font-weight: 400; letter-spacing: 0; text-transform: none; }
+.group-empty-badge { background: rgba(251,191,36,0.08); color: #92400e; border: 1px solid rgba(251,191,36,0.2); font-size: 9px; font-weight: 600; padding: 1px 6px; border-radius: 8px; letter-spacing: 0.04em; text-transform: uppercase; }
 
-.chevron-key {
-  display: inline-block;
-  margin-right: 6px;
-  font-size: 9px;
-  color: #3f3f46;
-  transition: transform 0.15s;
-}
-tr.is-open .chevron-key { transform: rotate(90deg); color: #818cf8; }
+/* ── Key cells ── */
+td { border-bottom: 1px solid #1c1c1f; vertical-align: middle; max-width: 360px; }
+td.key-cell, td.value-cell { padding: 7px 12px; }
+.density-compact td.key-cell, .density-compact td.value-cell { padding: 3px 12px; }
+.density-relaxed td.key-cell, .density-relaxed td.value-cell { padding: 12px; }
 
-/* ── Data rows ── */
-td {
-  padding: 8px 14px;
-  border-bottom: 1px solid #1c1c1f;
-  vertical-align: middle;
-  max-width: 360px;
-}
-tr.data-row:hover .key-cell,
-tr.data-row:hover .value-cell:not(.editing) { background: #1c1c1f; }
+tr.data-row:hover .key-cell, tr.data-row:hover .value-cell:not(.editing) { background: #1c1c1f; }
 tr.data-row.is-open .key-cell { background: #1c1c1f; border-bottom-color: transparent; }
+tr.data-row.row-selected td { background: rgba(129,140,248,0.05); }
+tr.data-row.row-selected:hover td.key-cell,
+tr.data-row.row-selected:hover td.value-cell { background: rgba(129,140,248,0.09); }
 
-td.key-cell {
-  font-family: 'SF Mono', 'Fira Code', monospace;
-  font-size: 12px;
-  color: #818cf8;
-  white-space: nowrap;
-  user-select: none;
-  cursor: pointer;
+.key-cell-inner { display: flex; align-items: center; gap: 5px; min-width: 0; }
+.key-label { flex-shrink: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chevron-key-icon { color: #3f3f46; transition: color 0.12s; flex-shrink: 0; }
+tr.is-open .chevron-key-icon { color: #818cf8; }
+.key-icon { color: #3f3f46; flex-shrink: 0; }
+
+td.key-cell { font-family: 'SF Mono','Fira Code',monospace; font-size: 12px; color: #818cf8; white-space: nowrap; user-select: none; cursor: pointer; }
+td.key-cell.indent { padding-left: 26px; color: #6366f1; }
+
+/* Inline key action buttons — hidden, appear on row hover */
+.key-actions {
+  display: flex; align-items: center; gap: 1px;
+  margin-left: auto; flex-shrink: 0;
+  opacity: 0; transition: opacity 0.12s;
 }
-td.key-cell.indent { padding-left: 30px; color: #6366f1; }
+tr.data-row:hover .key-actions { opacity: 1; }
+
+/* Group action buttons */
+.group-name-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.group-actions {
+  display: flex; align-items: center; gap: 1px;
+  margin-left: auto; flex-shrink: 0;
+  opacity: 0; transition: opacity 0.12s;
+}
+tr.group-row:hover .group-actions { opacity: 1; }
+.btn-action--group { color: #3f3f46; }
+.btn-action--group:hover { background: #27272a; color: #a1a1aa; border-color: #3f3f46; }
+td.kb-focus-cell { box-shadow: inset 0 0 0 1px rgba(129,140,248,0.4); }
+
+.note-indicator { display: inline-flex; align-items: center; color: #818cf8; opacity: 0.7; flex-shrink: 0; }
+.badge-unused {
+  display: inline-flex; align-items: center; gap: 3px; font-size: 9px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase;
+  color: #3f3f46; background: #111113; border: 1px solid #1c1c1f; border-radius: 3px; padding: 1px 5px; flex-shrink: 0;
+}
+.badge-dup {
+  display: inline-flex; align-items: center; gap: 3px; font-size: 9px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase;
+  color: #a78bfa; background: rgba(167,139,250,0.08); border: 1px solid rgba(167,139,250,0.2); border-radius: 3px; padding: 1px 5px; flex-shrink: 0;
+}
 
 /* ── Value cells ── */
 td.value-cell { cursor: pointer; }
-td.value-cell.editing { cursor: default; padding: 4px 8px; }
-td.value-cell.missing .value-text { color: #52525b; font-style: italic; font-size: 12px; }
+td.value-cell.editing { cursor: default; padding: 3px 6px; }
+td.value-cell.mismatch, td.value-cell.tag-warn { background: rgba(251,191,36,0.03); }
+td.value-cell.icu-err { background: rgba(239,68,68,0.03); }
 
 .value-text {
-  display: block;
-  min-height: 20px;
-  padding: 2px 6px;
-  border-radius: 4px;
-  border: 1px solid transparent;
-  transition: background 0.1s, border-color 0.1s;
+  display: inline-flex; align-items: baseline; gap: 5px; min-height: 20px;
+  padding: 2px 5px; border-radius: 4px; border: 1px solid transparent;
+  transition: background 0.1s, border-color 0.1s; font-size: 13px; line-height: 1.4; word-break: break-word; max-width: 100%;
 }
-td.value-cell:not(.editing):hover .value-text {
-  background: #27272a;
-  border-color: #3f3f46;
-}
+td.value-cell:not(.editing):hover .value-text { background: #27272a; border-color: #3f3f46; }
+.cell-missing { color: #3f3f46; font-style: italic; font-size: 12px; }
+.cell-empty   { color: #b45309; font-style: italic; font-size: 12px; }
 
-/* ── Edit mode ── */
-.edit-wrap { display: flex; align-items: center; gap: 4px; }
+.copy-ref-btn {
+  display: inline-flex; align-items: center; gap: 3px;
+  margin-left: 4px; padding: 1px 6px;
+  background: rgba(129,140,248,0.1); border: 1px solid rgba(129,140,248,0.2); border-radius: 3px;
+  color: #818cf8; font-size: 9px; font-weight: 600; cursor: pointer; white-space: nowrap;
+  transition: background 0.1s;
+}
+.copy-ref-btn:hover { background: rgba(129,140,248,0.2); }
+
+.warn-icon { flex-shrink: 0; }
+td.value-cell.mismatch .warn-icon, td.value-cell.tag-warn .warn-icon { color: #fbbf24; }
+td.value-cell.icu-err .warn-icon  { color: #f87171; }
+td.value-cell.len-warn .warn-icon { color: #a78bfa; }
+td.value-cell.len-warn .value-text { color: #a78bfa; }
+td.value-cell.mismatch .value-text, td.value-cell.tag-warn .value-text { color: #fbbf24; }
+td.value-cell.icu-err .value-text  { color: #f87171; }
+td.value-cell.is-dup .value-text   { color: #a78bfa; }
+
+/* ── Edit ── */
+.edit-wrap { display: flex; align-items: flex-start; gap: 4px; }
 .edit-input {
-  flex: 1;
-  background: #27272a;
-  border: 1px solid #3f3f46;
-  border-radius: 4px;
-  color: #e4e4e7;
-  font-size: 13px;
-  font-family: inherit;
-  padding: 4px 8px;
-  outline: none;
-  min-width: 0;
+  flex: 1; background: #27272a; border: 1px solid #3f3f46; border-radius: 4px;
+  color: #e4e4e7; font-size: 13px; font-family: inherit; padding: 4px 8px; outline: none; resize: none; overflow: hidden; min-width: 0; line-height: 1.4; transition: border-color 0.15s;
 }
 .edit-input:focus { border-color: #818cf8; }
-.btn-confirm, .btn-cancel {
-  flex-shrink: 0;
-  width: 26px;
-  height: 26px;
-  border: none;
-  border-radius: 4px;
-  cursor: pointer;
-  font-size: 13px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
+.edit-btns { display: flex; flex-direction: row; gap: 2px; flex-shrink: 0; align-items: center; }
+.btn-confirm, .btn-cancel { width: 24px; height: 24px; border: none; border-radius: 3px; cursor: pointer; display: flex; align-items: center; justify-content: center; }
+.btn-confirm { background: rgba(74,222,128,0.12); color: #4ade80; }
+.btn-confirm:hover { background: rgba(74,222,128,0.22); }
+.btn-cancel  { background: rgba(239,68,68,0.12); color: #f87171; }
+.btn-cancel:hover  { background: rgba(239,68,68,0.22); }
+
+/* ── Action buttons ── */
+.btn-action {
+  width: 22px; height: 22px; border: 1px solid transparent; border-radius: 3px;
+  background: transparent; color: #52525b; cursor: pointer; display: inline-flex; align-items: center; justify-content: center;
+  transition: background 0.12s, color 0.12s, border-color 0.12s; flex-shrink: 0;
 }
-.btn-confirm { background: rgba(74, 222, 128, 0.12); color: #4ade80; }
-.btn-confirm:hover { background: rgba(74, 222, 128, 0.22); }
-.btn-cancel { background: rgba(239, 68, 68, 0.12); color: #f87171; }
-.btn-cancel:hover { background: rgba(239, 68, 68, 0.22); }
+.btn-action:hover { background: #27272a; color: #a1a1aa; border-color: #3f3f46; }
+.btn-action--danger:hover { background: rgba(239,68,68,0.12); color: #f87171; border-color: rgba(239,68,68,0.2); }
 
 /* ── Detail row ── */
-tr.detail-row td { padding: 0; border-bottom: 1px solid #27272a; background: #111113; cursor: default; }
-.detail-inner { padding: 10px 14px 12px 30px; display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
-.detail-label { font-size: 11px; color: #3f3f46; width: 100%; margin-bottom: 2px; }
+tr.detail-row td { padding: 0; border-bottom: 1px solid #27272a; background: #0f0f11; cursor: default; }
+.detail-inner { padding: 10px 14px 12px 26px; display: flex; flex-direction: column; gap: 10px; }
+.detail-section { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.detail-section--note, .detail-section--interp { border-top: 1px solid #1c1c1f; padding-top: 8px; }
+.detail-label { display: flex; align-items: center; gap: 5px; font-size: 11px; color: #3f3f46; width: 100%; margin-bottom: 2px; }
 .file-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  background: #18181b;
-  border: 1px solid #27272a;
-  border-radius: 5px;
-  padding: 3px 9px;
-  font-size: 11px;
-  font-family: 'SF Mono', 'Fira Code', monospace;
-  color: #a1a1aa;
+  display: inline-flex; align-items: center; gap: 5px;
+  background: #18181b; border: 1px solid #27272a; border-radius: 5px;
+  padding: 3px 9px; font-size: 11px; font-family: 'SF Mono','Fira Code',monospace; color: #71717a; text-decoration: none;
+  transition: border-color 0.12s, color 0.12s;
 }
-.no-usages { font-size: 12px; color: #3f3f46; font-style: italic; }
+.file-chip:hover { border-color: #818cf8; color: #a5b4fc; }
+.no-usages { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; color: #3f3f46; font-style: italic; }
+.detail-note-text { font-size: 12px; color: #a1a1aa; line-height: 1.5; }
+
+/* ── Interpolation preview ── */
+.interp-inputs { display: flex; flex-wrap: wrap; gap: 8px; width: 100%; margin-bottom: 8px; }
+.interp-field { display: flex; align-items: center; gap: 6px; }
+.interp-var { font-family: 'SF Mono','Fira Code',monospace; font-size: 11px; color: #818cf8; background: rgba(129,140,248,0.1); border: 1px solid rgba(129,140,248,0.2); border-radius: 4px; padding: 2px 6px; white-space: nowrap; }
+.interp-input { background: #18181b; border: 1px solid #27272a; border-radius: 4px; color: #d4d4d8; font-size: 12px; font-family: inherit; padding: 3px 8px; outline: none; width: 120px; transition: border-color 0.12s; }
+.interp-input:focus { border-color: #818cf8; }
+.interp-previews { display: flex; flex-direction: column; gap: 4px; width: 100%; }
+.interp-preview-row { display: flex; align-items: baseline; gap: 10px; }
+.interp-code { font-family: 'SF Mono','Fira Code',monospace; font-size: 10px; color: #52525b; background: #1c1c1f; border: 1px solid #27272a; border-radius: 3px; padding: 1px 5px; flex-shrink: 0; }
+.interp-result { font-size: 13px; color: #e4e4e7; line-height: 1.4; }
+
+/* ── Dialogs ── */
+.dialog-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.65); display: flex; align-items: center; justify-content: center; z-index: 200; backdrop-filter: blur(2px); }
+.dialog { background: #18181b; border: 1px solid #27272a; border-radius: 12px; padding: 20px 24px; min-width: 340px; max-width: 480px; display: flex; flex-direction: column; gap: 10px; box-shadow: 0 24px 64px rgba(0,0,0,0.5); }
+.dialog-header { display: flex; align-items: center; gap: 10px; }
+.dlg-icon { width: 28px; height: 28px; border-radius: 6px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+.dlg-icon--red    { background: rgba(239,68,68,0.1); border: 1px solid rgba(239,68,68,0.2); color: #f87171; }
+.dlg-icon--indigo { background: rgba(129,140,248,0.1); border: 1px solid rgba(129,140,248,0.2); color: #818cf8; }
+.dialog-title { font-size: 14px; font-weight: 700; color: #e4e4e7; margin: 0; }
+.dialog-key { display: flex; align-items: center; gap: 7px; font-family: 'SF Mono','Fira Code',monospace; font-size: 12px; color: #818cf8; background: #0f0f11; border: 1px solid #27272a; border-radius: 6px; padding: 6px 10px; margin: 0; word-break: break-all; }
+.dialog-note { font-size: 12px; color: #71717a; margin: 0; line-height: 1.6; }
+.field-hint {
+  display: flex; align-items: center; gap: 5px; flex-wrap: wrap;
+  font-size: 11px; color: #52525b; background: #111113;
+  border: 1px solid #27272a; border-radius: 5px; padding: 5px 9px;
+}
+.field-hint strong { color: #818cf8; font-weight: 600; }
+.dialog-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 4px; }
+.dlg-btn { display: flex; align-items: center; gap: 6px; padding: 6px 14px; border-radius: 6px; border: 1px solid #27272a; font-size: 12px; font-family: inherit; font-weight: 600; cursor: pointer; transition: background 0.12s; }
+.dlg-btn--cancel  { background: #27272a; color: #a1a1aa; }
+.dlg-btn--cancel:hover  { background: #3f3f46; }
+.dlg-btn--confirm { background: rgba(129,140,248,0.15); color: #818cf8; border-color: rgba(129,140,248,0.25); }
+.dlg-btn--confirm:hover { background: rgba(129,140,248,0.25); }
+.dlg-btn--danger  { background: rgba(239,68,68,0.15); color: #f87171; border-color: rgba(239,68,68,0.25); }
+.dlg-btn--danger:hover  { background: rgba(239,68,68,0.25); }
+.field-label { font-size: 11px; font-weight: 600; color: #71717a; text-transform: uppercase; letter-spacing: 0.05em; }
+.field-note  { font-weight: 400; text-transform: none; letter-spacing: 0; color: #52525b; }
+.field-input { width: 100%; box-sizing: border-box; background: #0f0f11; border: 1px solid #27272a; border-radius: 6px; color: #d4d4d8; font-size: 12px; font-family: inherit; padding: 6px 10px; outline: none; transition: border-color 0.15s; }
+.field-input:focus { border-color: #818cf8; }
+.field-textarea { resize: vertical; min-height: 64px; font-family: inherit; }
+.field-error { display: flex; align-items: center; gap: 5px; font-size: 12px; color: #f87171; }
 </style>

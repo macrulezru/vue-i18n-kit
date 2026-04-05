@@ -319,7 +319,7 @@ const NUXT_CONFIG_NAMES = [
   'nuxt.config.ts', 'nuxt.config.js', 'nuxt.config.mts', 'nuxt.config.mjs',
 ]
 
-function findProjectConfig(cwd: string): { path: string; kind: ConfigKind } | null {
+export function findProjectConfig(cwd: string): { path: string; kind: ConfigKind } | null {
   for (const name of VITE_CONFIG_NAMES) {
     const p = join(cwd, name)
     if (existsSync(p)) return { path: p, kind: 'vite' }

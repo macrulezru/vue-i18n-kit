@@ -1,7 +1,7 @@
-import { runInit } from './commands/init.js'
 import { runAdd } from './commands/add.js'
 import { runCheck } from './commands/check.js'
 import { runAutoConfig } from './commands/auto-config.js'
+import { runInitWizard } from './commands/init-wizard.js'
 import { startUiServer } from '../ui-server/server.js'
 
 const VERSION = '0.1.0'
@@ -31,10 +31,9 @@ function str(v: string | boolean | undefined, fallback: string): string {
 
 switch (command) {
   case 'init': {
-    const flags = parseFlags(rest)
-    runInit({
-      dir: str(flags['dir'], 'src/locales'),
-      locales: typeof flags['locales'] === 'string' ? flags['locales'].split(',') : ['en'],
+    runInitWizard(process.cwd()).catch((err: unknown) => {
+      console.error('[vue-i18n-kit] Unexpected error:', err)
+      process.exit(1)
     })
     break
   }
@@ -86,12 +85,16 @@ switch (command) {
 vue-i18n-kit v${VERSION} — Locale file management CLI
 
 Commands:
-  auto-config                   Auto-discover locale files, generate i18n-tools/
-                                  data, and configure vueI18nMapPlugin in vite.config
+  init                          Interactive setup wizard — creates i18n-kit.config.json,
+                                  locale JSON files, and configures vite/nuxt automatically.
+                                  Re-run at any time to update settings.
 
-  init [options]                Create locale JSON files with example structure
-    --dir <path>                Locales directory       (default: src/locales)
-    --locales <en,ru,de>        Comma-separated codes   (default: en)
+  ui [options]                  Start the locale editor UI
+    --port <number>             Port to listen on       (default: 4173)
+
+  auto-config                   Non-interactive: auto-discover locales from
+                                  createVueI18nPlugin and update vite/nuxt config.
+                                  Useful in CI or package.json scripts.
 
   add <locale> [options]        Add a new locale file based on an existing one
     --dir <path>                Locales directory       (default: src/locales)
@@ -103,14 +106,11 @@ Commands:
     --default <locale>          Reference locale        (default: first alphabetically)
     --fail                      Exit with code 1 if any keys are missing
 
-  ui [options]                  Start the locale editor UI
-    --port <number>             Port to listen on       (default: 4173)
-
 Examples:
-  npx vue-i18n-kit auto-config
-  npx vue-i18n-kit init --locales en,ru,de
+  npx vue-i18n-kit init                      # first-time setup or update config
+  npx vue-i18n-kit ui                        # open locale editor
+  npx vue-i18n-kit auto-config && vue-i18n-kit ui  # non-interactive flow
   npx vue-i18n-kit add fr --from en --empty
   npx vue-i18n-kit check --default en --fail
-  npx vue-i18n-kit ui
 `)
 }
