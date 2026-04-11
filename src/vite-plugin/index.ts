@@ -22,6 +22,15 @@ export interface VitePlugin {
   load?(id: string): string | null | undefined
 }
 
+export interface I18nKitRules {
+  interpolationPatterns?: string[]
+  lengthWarningFactor?: number
+  warnOnHtmlTags?: boolean
+  warnOnIcuErrors?: boolean
+  warnOnDuplicateValues?: boolean
+  minValueLength?: number
+}
+
 export interface I18nCheckPluginOptions {
   /**
    * Path to the directory containing locale JSON files,
@@ -42,6 +51,12 @@ export interface I18nCheckPluginOptions {
    * @default false
    */
   failOnMissing?: boolean
+
+  /**
+   * Validation rules — overrides defaults for length, placeholders, etc.
+   * These are the same rules configurable in `i18n-kit.config.json`.
+   */
+  rules?: I18nKitRules
 }
 
 function loadLocaleFiles(dir: string): Record<string, Record<string, unknown>> {

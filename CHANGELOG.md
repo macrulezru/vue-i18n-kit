@@ -11,6 +11,149 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.3.0] — 2026-04-05
+
+### Added
+
+#### Config — `rules` section
+- New `rules` field in `i18n-kit.config.json` with validation settings:
+  - `interpolationPatterns` — list of placeholder patterns (default: `["{var}"]`); supports `{{var}}`, `:param`, `%(var)s`
+  - `lengthWarningFactor` — length warning threshold (default: `2.5`); set to `0` to disable
+  - `warnOnHtmlTags` — enable/disable HTML tag mismatch warnings (default: `true`)
+  - `warnOnIcuErrors` — enable/disable ICU syntax error warnings (default: `true`)
+  - `warnOnDuplicateValues` — enable/disable same-value-across-locales warnings (default: `true`)
+  - `minValueLength` — warn if translation value is shorter than this (default: `0` = disabled)
+- Rules are applied in the locale editor table (cell highlighting, tooltips)
+- `vueI18nCheckPlugin` now accepts a `rules` option with the same shape
+
+#### Config — `ignore` section
+- New `ignore` field in `i18n-kit.config.json`:
+  - `ignore.prune` — key glob patterns that `prune` will never delete (e.g. `"status.*"`, `"dynamic.*"`)
+  - `ignore.duplicates` — key patterns excluded from duplicate-value warnings in the editor
+  - `ignore.unused` — key patterns excluded from unused-key warnings in the editor
+  - `ignore.scanExclude` — file/directory glob patterns excluded from the source code scanner (e.g. `"src/tests/**"`)
+- `vue-i18n-kit prune` reads `ignore.prune` automatically from config; also accepts `--ignore "status.*,legacy.*"` flag
+- Scanner (`buildEntriesMap`) respects `scanExclude` patterns
+
+#### Config — `locked` keys (extends / base dictionary)
+- New `locked` field in `i18n-kit.config.json` (base config only) — list of key patterns that child projects cannot modify
+- Supports glob: `"legal.*"`, `"brand.name"`, `"**"`
+- **Server** — `PUT /api/locale/:code` returns `403` when a request attempts to change a locked key
+- **Editor UI** — locked cells are rendered as read-only (greyed out, lock icon, tooltip "Key locked by base dictionary")
+- **CLI `merge`** — locked keys are never overwritten, even with `--overwrite`
+- **CLI `prune`** — locked keys are never removed
+- **`/api/config`** now returns `lockedKeys: string[]`
+
+#### CLI — `merge` improvements
+- Alphabetical key sort applied to result after merge (matches behaviour of `sort` command)
+- New `--no-sort` flag to skip sorting (for projects where key order matters)
+
+#### Config schema — TypeScript interfaces exported
+- `I18nKitRules` — validation rules type
+- `I18nKitIgnore` — exclusion lists type
+- Both exported from `vue-i18n-kit/config`
+
+#### UI — unused keys computed
+- `unusedKeys` computed (keys in locale files but not in code) is now filtered by `ignore.unused` patterns
+- Passed as `unusedKeys` prop to Dashboard component
+
+#### `/api/config` response extended
+- Now returns `rules`, `ignore`, `lockedKeys` alongside existing `locales` and `cwd`
+
+#### CLI — `types` command (TypeScript type generation)
+- New `vue-i18n-kit types` command — scans the reference locale and generates a `TranslationKey` union type + `TranslationKeyPrefix` type
+- Output written to `src/i18n.d.ts` by default; configurable via `--out <path>`
+- `--locale <code>` — choose which locale to use as the key source (default: first in config)
+- `--dir <path>` — locales directory (default: `src/locales`)
+- `--watch` — regenerates automatically when the locale file changes on disk (uses `fs.watchFile`)
+- Generated file includes a `declare module 'vue-i18n-kit' { interface Register { key: TranslationKey } }` block for typed `t()` calls
+
+#### CLI — `stale` command (outdated translation detection)
+- New `vue-i18n-kit stale` command — compares current reference locale values against SHA1 hashes stored in `i18n-kit.notes.json`
+- Reports keys whose reference text changed since the last review, with old and new values side-by-side
+- Requires `"staleTracking": true` in `i18n-kit.config.json`
+- `--locale <code>` and `--dir <path>` flags mirror other commands
+
+#### CLI — `export` command (XLIFF / PO export)
+- New `vue-i18n-kit export` command — exports a locale to XLIFF 1.2 or Gettext PO format
+- `--locale <code>` (required) — target locale to export
+- `--format <xliff|po>` — output format (default: `xliff`)
+- `--out <path>` — output file path (default: `<locale>.<format>`)
+- `--dir <path>` — locales directory
+- `--ref <code>` — reference locale used as source language (default: first in config)
+- XLIFF output: standard `<file>` / `<body>` / `<trans-unit>` structure; notes as `<note>` elements
+- PO output: `msgctxt` = key, `msgid` = reference value, `msgstr` = translation; notes as `#.` comments
+
+#### CLI — `import` command (XLIFF / PO import)
+- New `vue-i18n-kit import <file>` command — reads a completed XLIFF or PO file and writes translated values into locale JSON
+- Target locale is read from the file itself (`target-language` in XLIFF, `Language:` header in PO)
+- `--dir <path>` — locales directory
+- `--dry` — preview changes without writing files
+- Output is sorted alphabetically; unrelated keys left untouched
+
+#### Config — `staleTracking` field
+- New boolean field in `i18n-kit.config.json` — enables hash-based stale tracking for the reference locale
+- When enabled, saving a reference locale value via the UI writes `_hash.<key>` to `i18n-kit.notes.json`
+
+#### Server — stale tracking endpoints
+- `GET /api/stale` — returns `{ staleKeys: string[], tracking: boolean }`
+- `POST /api/stale/review` — marks keys as reviewed (updates stored hashes)
+
+#### Server — export / import endpoints
+- `GET /api/export/xliff/:code` — generates and returns an XLIFF file
+- `GET /api/export/po/:code` — generates and returns a PO file
+- `POST /api/import` — accepts XLIFF or PO content, updates locale JSON
+
+#### UI — stale keys
+- `⚠ outdated` badge on key rows whose reference value changed
+- `stale` filter button in the toolbar (visible only when stale keys exist)
+- Detail panel for stale keys shows the current reference value and a **Mark as reviewed** button
+- Stale state loaded from `/api/stale` on startup
+
+#### UI — XLIFF / PO export and import
+- **Export** button in the header opens a locale-picker dialog with XLIFF / PO format toggle
+- **Import** file input (next to Import CSV) accepts `.xliff` and `.po` files; locale is detected from the file automatically
+
+#### Config — `translation` field
+- New optional `translation` field in `i18n-kit.config.json`:
+  - `translation.engine` — `"libretranslate"` (default) or `"deepl"`
+  - `translation.deepl.formality` — formality level (`default` / `more` / `less` / `prefer_more` / `prefer_less`)
+  - `translation.libretranslate.apiUrl` — LibreTranslate instance URL for project-level config
+
+#### Server — DeepL translation proxy
+- `POST /api/translate` now routes by `engine` field in the request body
+- **DeepL engine**: proxies to `api-free.deepl.com` (keys ending in `:fx`) or `api.deepl.com` (Pro keys); supports `formality` parameter; sends one request per string
+- **Placeholder encoding**: all `{…}` blocks (simple vars and ICU plural blocks) are replaced with `<x id="N"/>` XML tags before the request and restored after — translations survive word-order changes intact; uses DeepL's `tag_handling: "xml"` + `ignore_tags: ["x"]`
+- LibreTranslate path unchanged; falls back to `apiUrl` from request body
+
+#### CLI — `stats` command (coverage report)
+- New `vue-i18n-kit stats` command — prints a full coverage report to the terminal
+- Console output: per-locale coverage with ANSI progress bars (`█░`), namespace breakdown table (keys + % per locale), issues summary (missing / phantom / unused counts)
+- `--format json` — outputs a machine-readable JSON object; `--out <path>` writes to a file instead of stdout
+  - Fields: `generated`, `totalKeys`, `locales[]` (filled / empty / missing / coverage / bytes), `namespaces[]` (keys / bytes / byLocale coverage %), `phantom`, `unused`
+- `--format html` — writes a self-contained dark-theme HTML report (`i18n-stats.html` by default) with per-locale progress bars and namespace table
+- `--dir <path>` — locales directory override
+- Byte sizes are computed per namespace by summing raw string lengths across all locales
+
+#### UI Settings — machine translation engine selector
+- New **Translation engine** toggle in the Settings popover (LibreTranslate / DeepL)
+- **LibreTranslate** fields: URL + API key (existing, unchanged)
+- **DeepL** fields: Auth Key (password input), Formality selector (`Default` / `More formal` / `Less formal` / `Prefer more formal` / `Prefer less formal`); hint explains `:fx` suffix and free-plan limits
+- All settings persisted to `localStorage`; engine choice sent to `/api/translate` on each translation run
+- Translate dialog footer shows the active engine name and current formality setting
+
+#### UI Dashboard — Coverage card
+- The single overall-coverage bar has been replaced with a full **Coverage** card section
+- Shows overall coverage percentage + bar at the top
+- Below: compact per-locale rows with flag, name, progress bar, percentage, and missing count
+- Bar and percentage colour-coded: green (100%) / purple (≥ 80%) / yellow (50–79%) / red (< 50%)
+
+### Changed
+- `buildEntriesMap(root)` signature extended to `buildEntriesMap(root, excludePatterns?)` — fully backward compatible
+- `scanFiles` now accepts `root` and `excludePatterns` parameters; exclude check uses relative paths
+
+---
+
 ## [0.2.1] — 2026-04-05
 
 ### Added

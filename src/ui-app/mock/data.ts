@@ -4,6 +4,19 @@ export const mockConfig = {
     { code: 'ru', path: 'src/locales/ru.json', meta: { display: 'Русский', flag: '🇷🇺' } },
     { code: 'de', path: 'src/locales/de.json', meta: { display: 'Deutsch', flag: '🇩🇪' } },
   ],
+  rules: {
+    lengthWarningFactor: 2.5,
+    warnOnHtmlTags: true,
+    warnOnIcuErrors: true,
+    warnOnDuplicateValues: true,
+  },
+  ignore: {
+    prune: [],
+    duplicates: [],
+    unused: [],
+    scanExclude: [],
+  },
+  lockedKeys: [] as string[],
 }
 
 export const mockLocales: Record<string, Record<string, unknown>> = {

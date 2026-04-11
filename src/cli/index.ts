@@ -4,9 +4,14 @@ import { runAutoConfig } from './commands/auto-config.js'
 import { runInitWizard } from './commands/init-wizard.js'
 import { runMerge } from './commands/merge.js'
 import { runPrune } from './commands/prune.js'
+import { runTypes } from './commands/types.js'
+import { runStale } from './commands/stale.js'
+import { runExport } from './commands/export-translations.js'
+import { runImport } from './commands/import-translations.js'
+import { runStats } from './commands/stats.js'
 import { startUiServer } from '../ui-server/server.js'
 
-const VERSION = '0.2.1'
+const VERSION = '0.3.0'
 
 const [, , command, ...rest] = process.argv
 
@@ -78,18 +83,83 @@ switch (command) {
       locale: typeof flags['locale'] === 'string' ? flags['locale'] : undefined,
       overwrite: flags['overwrite'] === true,
       dry: flags['dry'] === true,
+      noSort: flags['no-sort'] === true,
     })
     break
   }
 
   case 'prune': {
     const flags = parseFlags(rest)
+    const ignoreFlag = typeof flags['ignore'] === 'string' ? flags['ignore'].split(',').map(s => s.trim()) : undefined
     runPrune({
       dir: str(flags['dir'], 'src/locales'),
       cwd: process.cwd(),
       dry: flags['dry'] === true,
       yes: flags['yes'] === true,
       entriesFile: typeof flags['entries'] === 'string' ? flags['entries'] : undefined,
+      ignore: ignoreFlag,
+    })
+    break
+  }
+
+  case 'types': {
+    const flags = parseFlags(rest)
+    runTypes({
+      out:    typeof flags['out']    === 'string' ? flags['out']    : undefined,
+      locale: typeof flags['locale'] === 'string' ? flags['locale'] : undefined,
+      dir:    typeof flags['dir']    === 'string' ? flags['dir']    : undefined,
+      watch:  flags['watch'] === true,
+    })
+    break
+  }
+
+  case 'export': {
+    const flags = parseFlags(rest)
+    if (!flags['locale']) {
+      console.error('Usage: vue-i18n-kit export --locale <code> [--format xliff|po] [--out <path>] [--dir <path>]')
+      process.exit(1)
+    }
+    runExport({
+      locale:          str(flags['locale'] as string, ''),
+      format:          flags['format'] === 'po' ? 'po' : 'xliff',
+      out:             typeof flags['out'] === 'string' ? flags['out'] : undefined,
+      dir:             typeof flags['dir'] === 'string' ? flags['dir'] : undefined,
+      referenceLocale: typeof flags['ref']  === 'string' ? flags['ref']  : undefined,
+    })
+    break
+  }
+
+  case 'import': {
+    const flags = parseFlags(rest)
+    const file = rest.find(a => !a.startsWith('--'))
+    if (!file && typeof flags['file'] !== 'string') {
+      console.error('Usage: vue-i18n-kit import <file.xliff|file.po> [--dir <path>] [--dry]')
+      process.exit(1)
+    }
+    runImport({
+      file: file ?? str(flags['file'] as string, ''),
+      dir:  typeof flags['dir'] === 'string' ? flags['dir'] : undefined,
+      dry:  flags['dry'] === true,
+    })
+    break
+  }
+
+  case 'stats': {
+    const flags = parseFlags(rest)
+    const fmt = flags['format']
+    runStats({
+      format: fmt === 'json' ? 'json' : fmt === 'html' ? 'html' : 'console',
+      out: typeof flags['out'] === 'string' ? flags['out'] : undefined,
+      dir: typeof flags['dir'] === 'string' ? flags['dir'] : undefined,
+    })
+    break
+  }
+
+  case 'stale': {
+    const flags = parseFlags(rest)
+    runStale({
+      dir:    typeof flags['dir']    === 'string' ? flags['dir']    : undefined,
+      locale: typeof flags['locale'] === 'string' ? flags['locale'] : undefined,
     })
     break
   }
@@ -142,12 +212,40 @@ Commands:
     --locale <code>             Only merge into this locale (default: all)
     --overwrite                 Overwrite existing keys (default: add missing only)
     --dry                       Preview changes without writing files
+    --no-sort                   Skip alphabetical key sort (default: sort is applied)
 
   prune [options]               Remove keys not referenced in source code
     --dir <path>                Locales directory       (default: src/locales)
     --entries <file>            Path to pre-built entries JSON (skips scanning)
     --dry                       Preview keys to remove without writing files
     --yes                       Skip confirmation prompt
+    --ignore <patterns>         Comma-separated key patterns to never remove (e.g. "status.*,legacy.*")
+                                 Also reads ignore.prune from i18n-kit.config.json
+
+  types [options]               Generate TypeScript types (TranslationKey) from locale file
+    --out <path>                Output file               (default: src/i18n.d.ts)
+    --locale <code>             Locale to use as key source (default: first in config)
+    --dir <path>                Locales directory       (default: src/locales)
+    --watch                     Regenerate on file change
+
+  stats [options]               Coverage report: fill rate per locale and namespace
+    --format <console|json|html>  Output format         (default: console)
+    --out <path>                Write to file instead of stdout (json/html)
+    --dir <path>                Locales directory       (default: src/locales)
+
+  stale [options]               Show keys whose reference value changed since last translation
+    --dir <path>                Locales directory       (default: src/locales)
+    --locale <code>             Reference locale        (default: first in config)
+
+  export [options]              Export locales to XLIFF or PO format for translators
+    --format <xliff|po>         Output format           (default: xliff)
+    --locale <code>             Locale to export        (required)
+    --out <path>                Output file path        (default: <locale>.<format>)
+    --dir <path>                Locales directory       (default: src/locales)
+
+  import [options]              Import translations from XLIFF or PO file
+    --file <path>               Input XLIFF or PO file  (required)
+    --dir <path>                Locales directory       (default: src/locales)
 
 Examples:
   npx vue-i18n-kit init                           # first-time setup or update config
@@ -156,5 +254,12 @@ Examples:
   npx vue-i18n-kit check --default en --fail
   npx vue-i18n-kit merge shared/base.json --dry   # preview base dictionary merge
   npx vue-i18n-kit prune --dry                    # preview unused key removal
+  npx vue-i18n-kit types --watch                  # generate types, watch for changes
+  npx vue-i18n-kit stats                          # coverage report in console
+  npx vue-i18n-kit stats --format json --out ci-report.json
+  npx vue-i18n-kit stats --format html            # open i18n-stats.html
+  npx vue-i18n-kit stale                          # show outdated translations
+  npx vue-i18n-kit export --format po --locale ru # export Russian for translators
+  npx vue-i18n-kit import --file ru.po            # import completed translations
 `)
 }

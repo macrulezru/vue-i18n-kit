@@ -2,7 +2,7 @@ import { existsSync, readFileSync, writeFileSync, copyFileSync } from 'node:fs'
 import { join, resolve, dirname } from 'node:path'
 import type { I18nKitConfig, LocaleConfig } from './schema.js'
 
-export type { I18nKitConfig, LocaleConfig, LocaleMeta } from './schema.js'
+export type { I18nKitConfig, LocaleConfig, LocaleMeta, I18nKitRules, I18nKitIgnore } from './schema.js'
 
 export const CONFIG_FILENAME = 'i18n-kit.config.json'
 
@@ -76,6 +76,23 @@ export function readBaseLocales(
     }
   } catch { /* dir not readable */ }
   return result
+}
+
+/**
+ * Reads the `locked` keys list from the base config referenced by `extends`.
+ * Only the base config may declare locked keys — project configs cannot lock keys.
+ */
+export function getLockedKeys(cwd: string, config: I18nKitConfig): string[] {
+  if (!config.extends) return []
+  const target = resolve(cwd, config.extends)
+  if (!existsSync(target)) return []
+  try {
+    const raw = readFileSync(target.endsWith('.json') ? target : join(target, CONFIG_FILENAME), 'utf-8')
+    const baseConfig = JSON.parse(raw) as I18nKitConfig
+    return baseConfig.locked ?? []
+  } catch {
+    return []
+  }
 }
 
 /**

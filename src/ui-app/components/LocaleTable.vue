@@ -3,7 +3,7 @@ import { ref, computed, nextTick, watch } from 'vue'
 import Icon from './Icon.vue'
 import Checkbox from './Checkbox.vue'
 import { usePersisted } from '../composables/usePersisted'
-import type { LocaleInfo, LocaleData, LocaleEntries } from '../api'
+import type { LocaleInfo, LocaleData, LocaleEntries, I18nKitRules } from '../api'
 
 const props = defineProps<{
   keys: string[]
@@ -18,6 +18,9 @@ const props = defineProps<{
   externalSearch?: string
   duplicateKeys?: string[]
   phantomKeys?: string[]
+  lockedKeys?: string[]
+  staleKeys?: string[]
+  rules?: I18nKitRules
 }>()
 
 const emit = defineEmits<{
@@ -29,6 +32,7 @@ const emit = defineEmits<{
   saveNote:          [key: string, note: string]
   createKeyInGroup:  [prefix: string]
   renameGroup:       [oldPrefix: string, newPrefix: string]
+  markReviewed:      [keys: string[]]
 }>()
 
 // ── Persisted state ───────────────────────────────────────────────────────────
@@ -37,10 +41,8 @@ const density = usePersisted<'compact' | 'default' | 'relaxed'>('i18nkit:density
 
 // ── Toolbar ───────────────────────────────────────────────────────────────────
 
-const search         = ref('')
-const statusFilter   = ref<'all' | 'missing' | 'complete'>('all')
-const showUnusedOnly  = ref(false)
-const showPhantomOnly = ref(false)
+const search = ref('')
+const filter  = ref<'all' | 'missing' | 'complete' | 'unused' | 'phantom' | 'stale'>('all')
 
 // External search override (e.g. from namespace click in Dashboard)
 watch(() => props.externalSearch, val => { if (val != null) search.value = val }, { immediate: true })
@@ -165,10 +167,11 @@ function keyPassesFilters(key: string): boolean {
     const inNote   = (props.notes[key] ?? '').toLowerCase().includes(q)
     if (!inKey && !inValues && !inNote) return false
   }
-  if (showUnusedOnly.value  && props.entries[key]?.length) return false
-  if (showPhantomOnly.value && !props.phantomKeys?.includes(key)) return false
-  if (statusFilter.value === 'missing'  && !props.locales.some(l => !props.localeData[l.code]?.[key])) return false
-  if (statusFilter.value === 'complete' && props.locales.some(l => !props.localeData[l.code]?.[key]))  return false
+  if (filter.value === 'unused'   && props.entries[key]?.length) return false
+  if (filter.value === 'phantom'  && !props.phantomKeys?.includes(key)) return false
+  if (filter.value === 'stale'    && !props.staleKeys?.includes(key)) return false
+  if (filter.value === 'missing'  && !props.locales.some(l => !props.localeData[l.code]?.[key])) return false
+  if (filter.value === 'complete' && props.locales.some(l => !props.localeData[l.code]?.[key]))  return false
   return true
 }
 
@@ -290,57 +293,118 @@ function copyFromRef(key: string, code: string) {
   startEdit(key, code, refVal)
 }
 
-// ── Interpolation preview ─────────────────────────────────────────────────────
+// ── Unified ICU preview (interpolation + plural) ──────────────────────────────
 
-const interpValues = ref<Record<string, string>>({})
+const previewValues = ref<Record<string, string>>({})
 
-function placeholderVars(key: string): string[] {
+type PreviewVar = { name: string; type: 'plural' | 'text' }
+
+/** Collect all variables in a key: plural vars (numeric) + simple {var} vars (text) */
+function allPreviewVars(key: string): PreviewVar[] {
   const allVals = props.locales.map(l => props.localeData[l.code]?.[key] ?? '').join(' ')
-  return [...new Set([...allVals.matchAll(/\{(\w+)\}/g)].map(m => m[1]))]
-}
-function renderInterp(str: string, key: string): string {
-  return str.replace(/\{(\w+)\}/g, (_, v) => interpValues.value[`${key}:${v}`] ?? `{${v}}`)
-}
+  const pluralNames = new Set<string>()
+  const textNames   = new Set<string>()
+  let m: RegExpExecArray | null
 
-// ── Plural preview ────────────────────────────────────────────────────────────
+  const pluralRe = /\{(\w+)\s*,\s*plural\s*,/g
+  while ((m = pluralRe.exec(allVals)) !== null) pluralNames.add(m[1])
 
-const PLURAL_COUNTS = [0, 1, 2, 5, 11, 21]
-
-/** Returns the plural variable name if ALL locale values for this key use ICU plural format */
-function pluralVar(key: string): string | null {
-  const pattern = /\{(\w+),\s*plural\s*,/
-  for (const locale of props.locales) {
-    const val = props.localeData[locale.code]?.[key]
-    if (val && pattern.test(val)) {
-      return val.match(pattern)?.[1] ?? null
-    }
+  const textRe = /\{(\w+)\}/g
+  while ((m = textRe.exec(allVals)) !== null) {
+    if (!pluralNames.has(m[1])) textNames.add(m[1])
   }
-  return null
+
+  return [
+    ...[...pluralNames].map(name => ({ name, type: 'plural' as const })),
+    ...[...textNames].map(name => ({ name, type: 'text' as const })),
+  ]
 }
 
-/** Render ICU plural string for a given count value */
-function renderPlural(str: string, varName: string, count: number): string {
+/** Render a locale string: resolve all {var, plural,...} blocks, then replace {var} */
+function renderIcuFull(str: string, key: string, localeCode: string): string {
   if (!str) return '—'
-  // Replace {varName, plural, one{...} other{...}} with the matching form
-  const re = new RegExp(`\\{${varName},\\s*plural\\s*,([^}]+(?:\\{[^}]*\\}[^}]*)*)\\}`)
-  const m = str.match(re)
-  if (!m) return str.replace(new RegExp(`\\{${varName}\\}`, 'g'), String(count))
+  let result = str
 
-  const body = m[1]
-  // Try exact =N match first
-  const exact = body.match(new RegExp(`=\\s*${count}\\s*\\{([^}]*)\\}`))
-  if (exact) return exact[1].replace(/#/g, String(count))
-
-  // Determine CLDR plural category
-  let category = 'other'
-  try { category = new Intl.PluralRules('en').select(count) } catch { /* noop */ }
-
-  // Try locale category match (one, few, many, other...)
-  for (const cat of [category, 'other']) {
-    const catMatch = body.match(new RegExp(`(?<![=\\d])${cat}\\s*\\{([^}]*)\\}`))
-    if (catMatch) return catMatch[1].replace(/#/g, String(count))
+  // find all plural variable names present in this string
+  const pluralVarRe = /\{(\w+)\s*,\s*plural\s*,/g
+  let m: RegExpExecArray | null
+  const pluralVarList: string[] = []
+  while ((m = pluralVarRe.exec(result)) !== null) {
+    if (!pluralVarList.includes(m[1])) pluralVarList.push(m[1])
   }
-  return str
+
+  for (const varName of pluralVarList) {
+    // find block start
+    const startRe = new RegExp(`\\{\\s*${varName}\\s*,\\s*plural\\s*,`)
+    const mStart = startRe.exec(result)
+    if (!mStart) continue
+
+    // walk forward counting braces to find block end
+    let pos = mStart.index + mStart[0].length
+    let depth = 1
+    while (pos < result.length && depth > 0) {
+      if (result[pos] === '{') depth++
+      else if (result[pos] === '}') depth--
+      pos++
+    }
+
+    const block  = result.slice(mStart.index, pos)
+    const cases  = parseIcuCases(block, varName) ?? {}
+    const count  = parseInt(previewValues.value[`${key}:${varName}`] ?? '1', 10) || 0
+
+    let resolved: string
+    if ((`=${count}`) in cases) {
+      resolved = cases[`=${count}`]
+    } else {
+      let cat = 'other'
+      try { cat = new Intl.PluralRules(localeCode).select(count) } catch { /* noop */ }
+      resolved = cases[cat] ?? cases['other'] ?? block
+    }
+    resolved = resolved.replace(/#/g, String(count))
+    result = result.slice(0, mStart.index) + resolved + result.slice(pos)
+  }
+
+  // replace remaining simple {var} placeholders
+  result = result.replace(/\{(\w+)\}/g, (_, varName) =>
+    previewValues.value[`${key}:${varName}`] ?? `{${varName}}`
+  )
+
+  return result
+}
+
+/** Parse ICU plural cases from a string using brace counting (handles nested braces) */
+function parseIcuCases(str: string, varName: string): Record<string, string> | null {
+  const startRe = new RegExp(`\\{\\s*${varName}\\s*,\\s*plural\\s*,\\s*`)
+  const m = startRe.exec(str)
+  if (!m) return null
+
+  let pos = m.index + m[0].length
+  const cases: Record<string, string> = {}
+
+  while (pos < str.length) {
+    // skip whitespace
+    while (pos < str.length && /\s/.test(str[pos])) pos++
+    if (pos >= str.length || str[pos] === '}') break
+
+    // read case name: "one", "other", "few", "=0" etc.
+    const nameStart = pos
+    while (pos < str.length && str[pos] !== '{' && str[pos] !== '}') pos++
+    const caseName = str.slice(nameStart, pos).trim()
+    if (!caseName || str[pos] !== '{') break
+
+    // read body counting nested braces
+    pos++ // skip opening {
+    let depth = 1
+    const bodyStart = pos
+    while (pos < str.length && depth > 0) {
+      if (str[pos] === '{') depth++
+      else if (str[pos] === '}') depth--
+      pos++
+    }
+    cases[caseName] = str.slice(bodyStart, pos - 1)
+  }
+
+  return Object.keys(cases).length ? cases : null
 }
 
 // ── Jump to key ───────────────────────────────────────────────────────────────
@@ -479,36 +543,59 @@ function submitNewGroup() {
   closeNewGroup()
 }
 
+// ── Locked key check ──────────────────────────────────────────────────────────
+
+function isLocked(key: string): boolean {
+  const patterns = props.lockedKeys
+  if (!patterns?.length) return false
+  return patterns.some(p => {
+    if (p === key) return true
+    if (p.endsWith('.*')) { const pfx = p.slice(0, -2); return key === pfx || key.startsWith(pfx + '.') }
+    if (p.endsWith('.**')) return key.startsWith(p.slice(0, -3) + '.')
+    if (p === '**' || p === '*') return true
+    if (p.includes('*')) { try { return new RegExp('^' + p.replace(/\./g, '\\.').replace(/\*/g, '[^.]*') + '$').test(key) } catch { return false } }
+    return false
+  })
+}
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 function localeName(l: LocaleInfo) { return (l.meta?.display as string | undefined) ?? l.code }
 function localeFlag(l: LocaleInfo) { return l.meta?.flag as string | undefined }
 
 function cellClass(key: string, code: string) {
+  const rules    = props.rules
+  const lenFactor = rules?.lengthWarningFactor ?? 2.5
   const editing  = isEditing(key, code)
   const missing  = !editing && isMissing(key, code)
   const empty    = !editing && !missing && isEmpty(key, code)
   const mismatch = !editing && !missing && !empty && hasPlaceholderMismatch(key, code)
-  const tagWarn  = !editing && !missing && !empty && hasTagMismatch(key, code)
-  const icuErr   = !editing && !missing && !empty && !!getIcuError(props.localeData[code]?.[key] ?? '')
-  const lenWarn  = !editing && !missing && !empty && lengthRatio(key, code) > 2.5
+  const tagWarn  = !editing && !missing && !empty && (rules?.warnOnHtmlTags !== false) && hasTagMismatch(key, code)
+  const icuErr   = !editing && !missing && !empty && (rules?.warnOnIcuErrors !== false) && !!getIcuError(props.localeData[code]?.[key] ?? '')
+  const lenWarn  = lenFactor > 0 && !editing && !missing && !empty && lengthRatio(key, code) > lenFactor
+  const minLen   = rules?.minValueLength ?? 0
+  const tooShort = minLen > 0 && !editing && !missing && !empty && (props.localeData[code]?.[key]?.length ?? 0) < minLen
   const unused   = !props.entries[key]?.length
-  const isDup    = props.duplicateKeys?.includes(key) ?? false
-  return { missing, empty, editing, mismatch, 'tag-warn': tagWarn, 'icu-err': icuErr, 'len-warn': lenWarn, 'key-unused': unused && !missing, 'is-dup': isDup && !missing && !empty }
+  const isDup    = (rules?.warnOnDuplicateValues !== false) && (props.duplicateKeys?.includes(key) ?? false)
+  return { missing, empty, editing, mismatch, 'tag-warn': tagWarn, 'icu-err': icuErr, 'len-warn': lenWarn || tooShort, 'key-unused': unused && !missing, 'is-dup': isDup && !missing && !empty }
 }
 
 function cellWarningIcon(key: string, code: string): string | null {
+  const rules = props.rules
+  const lenFactor = rules?.lengthWarningFactor ?? 2.5
   if (isMissing(key, code) || isEmpty(key, code)) return null
-  if (hasPlaceholderMismatch(key, code) || hasTagMismatch(key, code)) return 'warning'
-  if (getIcuError(props.localeData[code]?.[key] ?? '')) return 'alertTriangle'
-  if (lengthRatio(key, code) > 2.5) return 'info'
+  if (hasPlaceholderMismatch(key, code) || ((rules?.warnOnHtmlTags !== false) && hasTagMismatch(key, code))) return 'warning'
+  if ((rules?.warnOnIcuErrors !== false) && getIcuError(props.localeData[code]?.[key] ?? '')) return 'alertTriangle'
+  if (lenFactor > 0 && lengthRatio(key, code) > lenFactor) return 'info'
   return null
 }
 function cellWarningTitle(key: string, code: string): string | undefined {
+  const rules = props.rules
+  const lenFactor = rules?.lengthWarningFactor ?? 2.5
   if (hasPlaceholderMismatch(key, code)) return 'Placeholder mismatch vs reference'
-  if (hasTagMismatch(key, code)) return 'HTML tag mismatch vs reference'
-  const icu = getIcuError(props.localeData[code]?.[key] ?? ''); if (icu) return `ICU error: ${icu}`
-  if (lengthRatio(key, code) > 2.5) return `${Math.round(lengthRatio(key, code) * 10) / 10}× longer than reference`
+  if ((rules?.warnOnHtmlTags !== false) && hasTagMismatch(key, code)) return 'HTML tag mismatch vs reference'
+  const icu = (rules?.warnOnIcuErrors !== false) && getIcuError(props.localeData[code]?.[key] ?? ''); if (icu) return `ICU error: ${icu}`
+  if (lenFactor > 0 && lengthRatio(key, code) > lenFactor) return `${Math.round(lengthRatio(key, code) * 10) / 10}× longer than reference`
   return undefined
 }
 
@@ -547,18 +634,21 @@ function fileUrl(file: string): string {
 
     <div class="filter-group">
       <button v-for="opt in (['all','missing','complete'] as const)" :key="opt"
-        class="filter-btn" :class="{ active: statusFilter === opt }" @click="statusFilter = opt">
+        class="filter-btn" :class="{ active: filter === opt }" @click="filter = opt">
         <span class="filter-dot" :class="'dot--' + opt" />{{ opt }}
       </button>
+      <button class="filter-btn filter-btn--unused" :class="{ active: filter === 'unused' }" @click="filter = filter === 'unused' ? 'all' : 'unused'">
+        <Icon name="zap" :size="11" />unused
+      </button>
+      <button v-if="phantomKeys?.length" class="filter-btn filter-btn--phantom" :class="{ active: filter === 'phantom' }" @click="filter = filter === 'phantom' ? 'all' : 'phantom'">
+        <Icon name="warning" :size="11" />phantom
+        <span class="filter-count">{{ phantomKeys.length }}</span>
+      </button>
+      <button v-if="staleKeys?.length" class="filter-btn filter-btn--stale" :class="{ active: filter === 'stale' }" @click="filter = filter === 'stale' ? 'all' : 'stale'">
+        <Icon name="clock" :size="11" />outdated
+        <span class="filter-count filter-count--stale">{{ staleKeys.length }}</span>
+      </button>
     </div>
-
-    <button class="filter-btn filter-btn--unused" :class="{ active: showUnusedOnly }" @click="showUnusedOnly = !showUnusedOnly">
-      <Icon name="zap" :size="11" />unused
-    </button>
-    <button v-if="phantomKeys?.length" class="filter-btn filter-btn--phantom" :class="{ active: showPhantomOnly }" @click="showPhantomOnly = !showPhantomOnly">
-      <Icon name="warning" :size="11" />phantom
-      <span class="filter-count">{{ phantomKeys.length }}</span>
-    </button>
 
     <div class="toolbar-sep" />
 
@@ -662,21 +752,26 @@ function fileUrl(file: string): string {
                   <Icon :name="selectedKey === row.key ? 'chevronDown' : 'chevronRight'" :size="10" class="chevron-key-icon" />
                   <Icon name="key" :size="10" class="key-icon" />
                   <span class="key-label">{{ row.label }}</span>
+                  <Icon v-if="isLocked(row.key)" name="lock" :size="9" class="key-lock-icon" title="Locked by base dictionary" />
+                  <span v-if="phantomKeys?.includes(row.key)" class="badge-phantom" title="Used in code but missing from all locale files"><Icon name="warning" :size="8" />phantom</span>
+                  <span v-if="staleKeys?.includes(row.key)" class="badge-stale" title="Reference value changed — needs review"><Icon name="clock" :size="8" />outdated</span>
                   <span v-if="notes[row.key]" class="note-indicator" :title="notes[row.key]"><Icon name="note" :size="9" /></span>
                   <span v-if="duplicateKeys?.includes(row.key)" class="badge-dup" title="Same value in all locales"><Icon name="shuffle" :size="8" />dup</span>
-                  <span v-if="!entries[row.key]?.length" class="badge-unused"><Icon name="zap" :size="8" />unused</span>
+                  <span v-if="!phantomKeys?.includes(row.key) && !entries[row.key]?.length" class="badge-unused"><Icon name="zap" :size="8" />unused</span>
                   <div class="key-actions" @click.stop>
-                    <button class="btn-action" title="Rename" @click.stop="openRename(row.key)"><Icon name="edit" :size="11" /></button>
-                    <button class="btn-action" title="Duplicate" @click.stop="openDuplicate(row.key)"><Icon name="copy" :size="11" /></button>
+                    <template v-if="!phantomKeys?.includes(row.key)">
+                      <button class="btn-action" title="Rename" :disabled="isLocked(row.key)" @click.stop="openRename(row.key)"><Icon name="edit" :size="11" /></button>
+                      <button class="btn-action" title="Duplicate" @click.stop="openDuplicate(row.key)"><Icon name="copy" :size="11" /></button>
+                    </template>
                     <button class="btn-action" :title="notes[row.key] ? 'Edit note' : 'Add note'" @click.stop="openNote(row.key)">
                       <Icon name="note" :size="11" :style="{ color: notes[row.key] ? '#818cf8' : undefined }" />
                     </button>
-                    <button class="btn-action btn-action--danger" title="Delete" @click.stop="requestDelete(row.key)"><Icon name="trash" :size="11" /></button>
+                    <button v-if="!phantomKeys?.includes(row.key)" class="btn-action btn-action--danger" title="Delete" :disabled="isLocked(row.key)" @click.stop="requestDelete(row.key)"><Icon name="trash" :size="11" /></button>
                   </div>
                 </div>
               </td>
               <td v-for="(locale, colIdx) in locales" :key="locale.code"
-                class="value-cell" :class="[cellClass(row.key, locale.code), { 'kb-focus-cell': isFocusedCell(row.key, colIdx + 1) }]">
+                class="value-cell" :class="[cellClass(row.key, locale.code), { 'kb-focus-cell': isFocusedCell(row.key, colIdx + 1), 'value-cell--locked': isLocked(row.key) }]">
                 <div v-if="isEditing(row.key, locale.code)" class="edit-wrap">
                   <textarea ref="editInputEl" v-model="editingValue" class="edit-input" rows="1"
                     @input="autoResize($event.target as HTMLTextAreaElement)" @keydown="onEditKeydown" />
@@ -685,11 +780,11 @@ function fileUrl(file: string): string {
                     <button class="btn-cancel"  title="Cancel (Esc)" @click="cancelEdit"><Icon name="close" :size="11" /></button>
                   </div>
                 </div>
-                <span v-else class="value-text" :title="cellWarningTitle(row.key, locale.code)"
-                  @click="startEdit(row.key, locale.code, localeData[locale.code]?.[row.key] ?? '')">
+                <span v-else class="value-text" :title="isLocked(row.key) ? 'Key locked by base dictionary' : cellWarningTitle(row.key, locale.code)"
+                  @click="isLocked(row.key) ? undefined : startEdit(row.key, locale.code, localeData[locale.code]?.[row.key] ?? '')">
                   <template v-if="isMissing(row.key, locale.code)">
                     <span class="cell-missing">— missing —</span>
-                    <button v-if="locale.code !== referenceLocale && localeData[referenceLocale]?.[row.key]"
+                    <button v-if="!isLocked(row.key) && locale.code !== referenceLocale && localeData[referenceLocale]?.[row.key]"
                       class="copy-ref-btn" title="Copy from reference locale" @click.stop="copyFromRef(row.key, locale.code)">
                       <Icon name="copy" :size="9" />ref
                     </button>
@@ -697,7 +792,8 @@ function fileUrl(file: string): string {
                   <span v-else-if="isEmpty(row.key, locale.code)" class="cell-empty">— empty —</span>
                   <template v-else>
                     {{ localeData[locale.code]?.[row.key] }}
-                    <Icon v-if="cellWarningIcon(row.key, locale.code)" :name="cellWarningIcon(row.key, locale.code)!" :size="11" class="warn-icon" />
+                    <Icon v-if="isLocked(row.key)" name="lock" :size="10" class="lock-icon" />
+                    <Icon v-else-if="cellWarningIcon(row.key, locale.code)" :name="cellWarningIcon(row.key, locale.code)!" :size="11" class="warn-icon" />
                   </template>
                 </span>
               </td>
@@ -719,44 +815,36 @@ function fileUrl(file: string): string {
                     <span class="detail-label"><Icon name="note" :size="11" />Note</span>
                     <span class="detail-note-text">{{ notes[row.key] }}</span>
                   </div>
-                  <div v-if="placeholderVars(row.key).length" class="detail-section detail-section--interp">
-                    <span class="detail-label"><Icon name="wand" :size="11" />Interpolation preview</span>
+                  <!-- ── Unified preview (interpolation + plural) ───────── -->
+                  <div v-if="allPreviewVars(row.key).length" class="detail-section detail-section--interp">
+                    <span class="detail-label"><Icon name="wand" :size="11" />Preview</span>
                     <div class="interp-inputs">
-                      <div v-for="v in placeholderVars(row.key)" :key="v" class="interp-field">
-                        <span class="interp-var">&#123;{{ v }}&#125;</span>
-                        <input v-model="interpValues[`${row.key}:${v}`]" class="interp-input" :placeholder="v" />
+                      <div v-for="v in allPreviewVars(row.key)" :key="v.name" class="interp-field">
+                        <span class="interp-var" :class="{ 'interp-var--plural': v.type === 'plural' }">
+                          <span v-if="v.type === 'plural'" class="interp-plural-badge">#</span>&#123;{{ v.name }}&#125;
+                        </span>
+                        <input
+                          v-model="previewValues[`${row.key}:${v.name}`]"
+                          class="interp-input"
+                          :type="v.type === 'plural' ? 'number' : 'text'"
+                          :placeholder="v.type === 'plural' ? '1' : v.name"
+                          min="0"
+                        />
                       </div>
                     </div>
                     <div class="interp-previews">
                       <div v-for="locale in locales" :key="locale.code" class="interp-preview-row">
-                        <span class="interp-code">{{ locale.code }}</span>
-                        <span class="interp-result">{{ renderInterp(localeData[locale.code]?.[row.key] ?? '—', row.key) }}</span>
+                        <span class="interp-code">{{ locale.meta?.flag ?? '' }} {{ locale.code }}</span>
+                        <span class="interp-result">{{ renderIcuFull(localeData[locale.code]?.[row.key] ?? '', row.key, locale.code) }}</span>
                       </div>
                     </div>
                   </div>
-                  <!-- ── Plural preview ─────────────────────────────────── -->
-                  <div v-if="pluralVar(row.key)" class="detail-section detail-section--plural">
-                    <span class="detail-label"><Icon name="layers" :size="11" />Plural preview</span>
-                    <div class="plural-table-wrap">
-                      <table class="plural-table">
-                        <thead>
-                          <tr>
-                            <th class="plural-th plural-th--count">n</th>
-                            <th v-for="locale in locales" :key="locale.code" class="plural-th">
-                              {{ locale.meta?.flag ?? '' }} {{ locale.code }}
-                            </th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          <tr v-for="count in PLURAL_COUNTS" :key="count" class="plural-tr">
-                            <td class="plural-td plural-td--count">{{ count }}</td>
-                            <td v-for="locale in locales" :key="locale.code" class="plural-td">
-                              {{ renderPlural(localeData[locale.code]?.[row.key] ?? '', pluralVar(row.key)!, count) }}
-                            </td>
-                          </tr>
-                        </tbody>
-                      </table>
-                    </div>
+                  <!-- ── Stale review ───────────────────────────────────── -->
+                  <div v-if="staleKeys?.includes(row.key)" class="detail-section detail-section--stale">
+                    <span class="detail-stale-msg"><Icon name="clock" :size="11" />Reference value changed — other locales may be outdated</span>
+                    <button class="btn-mark-reviewed" @click="emit('markReviewed', [row.key])">
+                      <Icon name="check" :size="11" />Mark as reviewed
+                    </button>
                   </div>
                 </div>
               </td>
@@ -951,7 +1039,9 @@ function fileUrl(file: string): string {
 .filter-btn.active { background: #27272a; color: #e4e4e7; border-color: #3f3f46; }
 .filter-btn--unused.active { color: #fbbf24; border-color: rgba(251,191,36,0.25); background: rgba(251,191,36,0.07); }
 .filter-btn--phantom.active { color: #f87171; border-color: rgba(248,113,113,0.25); background: rgba(248,113,113,0.07); }
+.filter-btn--stale.active { color: #fb923c; border-color: rgba(251,146,60,0.25); background: rgba(251,146,60,0.07); }
 .filter-count { background: rgba(248,113,113,0.15); color: #f87171; font-size: 9px; padding: 0 4px; border-radius: 4px; }
+.filter-count--stale { background: rgba(251,146,60,0.15); color: #fb923c; }
 .filter-dot { width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; }
 .dot--all { background: #3f3f46; } .dot--missing { background: #fb923c; } .dot--complete { background: #4ade80; }
 .filter-btn.active .dot--all { background: #71717a; }
@@ -1081,6 +1171,8 @@ td.value-cell { cursor: pointer; }
 td.value-cell.editing { cursor: default; padding: 3px 6px; }
 td.value-cell.mismatch, td.value-cell.tag-warn { background: rgba(251,191,36,0.03); }
 td.value-cell.icu-err { background: rgba(239,68,68,0.03); }
+td.value-cell.value-cell--locked { cursor: default; background: rgba(63,63,70,0.2); }
+td.value-cell.value-cell--locked .value-text { color: #52525b; }
 
 .value-text {
   display: inline-flex; align-items: baseline; gap: 5px; min-height: 20px;
@@ -1108,6 +1200,17 @@ td.value-cell.len-warn .value-text { color: #a78bfa; }
 td.value-cell.mismatch .value-text, td.value-cell.tag-warn .value-text { color: #fbbf24; }
 td.value-cell.icu-err .value-text  { color: #f87171; }
 td.value-cell.is-dup .value-text   { color: #a78bfa; }
+
+.lock-icon { color: #52525b; flex-shrink: 0; }
+.key-lock-icon { color: #52525b; flex-shrink: 0; }
+
+/* ── Stale (outdated) ── */
+.badge-stale   { display: inline-flex; align-items: center; gap: 3px; font-size: 9px; font-weight: 600; color: #fb923c; background: rgba(251,146,60,0.12); border: 1px solid rgba(251,146,60,0.2); border-radius: 4px; padding: 0 4px; line-height: 16px; flex-shrink: 0; }
+.badge-phantom { display: inline-flex; align-items: center; gap: 3px; font-size: 9px; font-weight: 600; color: #f87171; background: rgba(248,113,113,0.1); border: 1px solid rgba(248,113,113,0.25); border-radius: 4px; padding: 0 4px; line-height: 16px; flex-shrink: 0; }
+.detail-section--stale { border-top: 1px solid #1c1c1f; padding-top: 8px; gap: 8px; }
+.detail-stale-msg { display: flex; align-items: center; gap: 5px; font-size: 12px; color: #fb923c; }
+.btn-mark-reviewed { display: inline-flex; align-items: center; gap: 4px; padding: 3px 10px; font-size: 11px; background: rgba(251,146,60,0.1); border: 1px solid rgba(251,146,60,0.25); color: #fb923c; border-radius: 5px; cursor: pointer; transition: background 0.15s; }
+.btn-mark-reviewed:hover { background: rgba(251,146,60,0.2); }
 
 /* ── Edit ── */
 .edit-wrap { display: flex; align-items: flex-start; gap: 4px; }
@@ -1159,6 +1262,8 @@ tr.detail-row td { padding: 0; border-bottom: 1px solid #27272a; background: #0f
 .interp-inputs { display: flex; flex-wrap: wrap; gap: 8px; width: 100%; margin-bottom: 8px; }
 .interp-field { display: flex; align-items: center; gap: 6px; }
 .interp-var { font-family: 'SF Mono','Fira Code',monospace; font-size: 11px; color: #818cf8; background: rgba(129,140,248,0.1); border: 1px solid rgba(129,140,248,0.2); border-radius: 4px; padding: 2px 6px; white-space: nowrap; }
+.interp-var--plural { color: #fb923c; background: rgba(251,146,60,0.1); border-color: rgba(251,146,60,0.25); }
+.interp-plural-badge { font-size: 9px; font-weight: 700; color: #fb923c; opacity: 0.7; margin-right: 2px; }
 .interp-input { background: #18181b; border: 1px solid #27272a; border-radius: 4px; color: #d4d4d8; font-size: 12px; font-family: inherit; padding: 3px 8px; outline: none; width: 120px; transition: border-color 0.12s; }
 .interp-input:focus { border-color: #818cf8; }
 .interp-previews { display: flex; flex-direction: column; gap: 4px; width: 100%; }

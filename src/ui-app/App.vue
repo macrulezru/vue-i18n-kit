@@ -9,10 +9,12 @@ import { usePersisted } from './composables/usePersisted'
 import { useToast } from './composables/useToast'
 import {
   fetchConfig, fetchLocale, fetchEntries, fetchNotes, fetchGitStatus,
+  fetchStale, markReviewed,
+  exportXliff, exportPo, importTranslations,
   createKey, deleteKey, renameKey, duplicateKey, saveNote,
   batchDeleteKeys, sortKeys, translateMissing, addLocale,
 } from './api'
-import type { LocaleInfo, LocaleData, LocaleEntries } from './api'
+import type { LocaleInfo, LocaleData, LocaleEntries, I18nKitIgnore, I18nKitRules } from './api'
 
 type Section = 'dashboard' | 'editor'
 const section        = usePersisted<Section>('section', 'dashboard')
@@ -20,6 +22,9 @@ const referenceLocale = usePersisted<string>('referenceLocale', '')
 const ideScheme      = usePersisted<string>('ideScheme', 'vscode')
 const libreUrl       = usePersisted<string>('libreUrl', 'https://libretranslate.com')
 const libreKey       = usePersisted<string>('libreKey', '')
+const translateEngine = usePersisted<'libretranslate' | 'deepl'>('translateEngine', 'libretranslate')
+const deeplKey       = usePersisted<string>('deeplKey', '')
+const deeplFormality = usePersisted<string>('deeplFormality', 'default')
 
 const { show: toast } = useToast()
 
@@ -31,6 +36,11 @@ const entries         = ref<LocaleEntries>({})
 const notes           = ref<Record<string, string>>({})
 const modifiedLocales = ref<string[]>([])
 const projectCwd      = ref<string | undefined>(undefined)
+const configIgnore    = ref<I18nKitIgnore>({})
+const configRules     = ref<I18nKitRules>({})
+const lockedKeys      = ref<string[]>([])
+const staleKeys       = ref<string[]>([])
+const staleTracking   = ref(false)
 
 // Auto-save indicator
 const isSaving  = ref(0)
@@ -43,6 +53,30 @@ const externalSearch = ref('')
 
 interface UndoEntry { code: string; key: string; prev: string }
 const undoStack = ref<UndoEntry[]>([])
+
+// ── Pattern matching for ignore lists ────────────────────────────────────────
+
+function matchesPattern(key: string, pattern: string): boolean {
+  if (pattern === '**' || pattern === '*') return true
+  if (pattern === key) return true
+  if (pattern.endsWith('.*')) {
+    const prefix = pattern.slice(0, -2)
+    return key === prefix || key.startsWith(prefix + '.')
+  }
+  if (pattern.endsWith('.**')) {
+    const prefix = pattern.slice(0, -3)
+    return key.startsWith(prefix + '.')
+  }
+  if (pattern.includes('*')) {
+    const re = new RegExp('^' + pattern.replace(/\./g, '\\.').replace(/\*/g, '[^.]*') + '$')
+    return re.test(key)
+  }
+  return false
+}
+
+function matchesAnyPattern(key: string, patterns: string[]): boolean {
+  return patterns.some(p => matchesPattern(key, p))
+}
 
 // ── All keys ──────────────────────────────────────────────────────────────────
 
@@ -59,11 +93,30 @@ const phantomKeys = computed<string[]>(() =>
   Object.keys(entries.value).filter(k => !allKeys.value.includes(k))
 )
 
+// Keys for the table: locale keys + phantom keys so phantom filter works
+const tableKeys = computed<string[]>(() =>
+  [...new Set([...allKeys.value, ...phantomKeys.value])].sort()
+)
+
+// ── Unused key detection (in locales but not in code) ─────────────────────────
+
+const unusedKeys = computed<string[]>(() => {
+  const entriesKeys = Object.keys(entries.value)
+  if (!entriesKeys.length) return []
+  const ignoreUnused = configIgnore.value.unused ?? []
+  return allKeys.value.filter(k =>
+    !entriesKeys.includes(k) &&
+    (ignoreUnused.length === 0 || !matchesAnyPattern(k, ignoreUnused))
+  )
+})
+
 // ── Duplicate key detection ───────────────────────────────────────────────────
 
 const duplicateKeys = computed<string[]>(() => {
   if (locales.value.length < 2) return []
+  const ignoreDuplicates = configIgnore.value.duplicates ?? []
   return allKeys.value.filter(key => {
+    if (ignoreDuplicates.length > 0 && matchesAnyPattern(key, ignoreDuplicates)) return false
     const vals = locales.value.map(l => localeData.value[l.code]?.[key] ?? '')
     return vals.every(v => v !== '' && v === vals[0])
   })
@@ -286,6 +339,12 @@ async function handleDuplicateKey(srcKey: string, newKey: string) {
   toast(`Duplicated as "${newKey}"`, 'success')
 }
 
+async function handleMarkReviewed(keys: string[]) {
+  await markReviewed(keys)
+  staleKeys.value = staleKeys.value.filter(k => !keys.includes(k))
+  toast(`${keys.length} key${keys.length > 1 ? 's' : ''} marked as reviewed`, 'success')
+}
+
 async function handleSaveNote(key: string, note: string) {
   await saveNote(key, note)
   notes.value = { ...notes.value, [key]: note }
@@ -448,6 +507,59 @@ function exportCsv() {
   toast('CSV exported', 'success')
 }
 
+// ── Export XLIFF/PO ──────────────────────────────────────────────────────────
+
+const showExportLocale = ref(false)
+const exportLocaleCode = ref('')
+const exportFormat     = ref<'xliff' | 'po'>('xliff')
+const showExportMenu   = ref(false)
+const showImportMenu   = ref(false)
+
+function openExportLocale(format?: 'xliff' | 'po') {
+  exportLocaleCode.value = locales.value[0]?.code ?? ''
+  if (format) exportFormat.value = format
+  showExportLocale.value = true
+  showExportMenu.value = false
+}
+
+function closeHeaderMenus() {
+  showExportMenu.value = false
+  showImportMenu.value = false
+}
+
+async function submitExportLocale() {
+  try {
+    if (exportFormat.value === 'po') await exportPo(exportLocaleCode.value)
+    else await exportXliff(exportLocaleCode.value)
+    showExportLocale.value = false
+    toast(`Exported ${exportLocaleCode.value}.${exportFormat.value}`, 'success')
+  } catch (e) {
+    toast(`Export failed: ${(e as Error).message}`, 'error', 4000)
+  }
+}
+
+// ── Import XLIFF/PO ───────────────────────────────────────────────────────────
+
+const xliffImportEl = ref<HTMLInputElement | null>(null)
+
+async function handleXliffImportFile(e: Event) {
+  const file = (e.target as HTMLInputElement).files?.[0]
+  if (!file) return
+  try {
+    const { locale: importedLocale, updated } = await importTranslations(file)
+    // Reload the locale in memory
+    const messages = await import('./api').then(m => m.fetchLocale(importedLocale))
+    localeData.value = { ...localeData.value, [importedLocale]: messages }
+    const raw = await fetch(`/api/locale/${importedLocale}`).then(r => r.json())
+    rawLocaleData.value = { ...rawLocaleData.value, [importedLocale]: raw }
+    if (xliffImportEl.value) xliffImportEl.value.value = ''
+    toast(`Imported ${updated} key(s) into ${importedLocale}`, 'success')
+  } catch (e) {
+    toast(`Import failed: ${(e as Error).message}`, 'error', 4000)
+    if (xliffImportEl.value) xliffImportEl.value.value = ''
+  }
+}
+
 // ── Import CSV ────────────────────────────────────────────────────────────────
 
 const showImport    = ref(false)
@@ -505,7 +617,7 @@ async function applyImport() {
   toast(`Imported ${count} change${count !== 1 ? 's' : ''}`, 'success')
 }
 
-// ── Translate missing (LibreTranslate) ────────────────────────────────────────
+// ── Translate missing ─────────────────────────────────────────────────────────
 
 const showTranslate   = ref(false)
 const translateFrom   = ref('')
@@ -538,7 +650,10 @@ async function runTranslate() {
       try {
         const translated = await translateMissing({
           values, from: translateFrom.value, to: toCode,
+          engine: translateEngine.value,
           apiUrl: libreUrl.value, apiKey: libreKey.value || undefined,
+          deeplKey: deeplKey.value || undefined,
+          formality: deeplFormality.value || undefined,
         })
         for (let i = 0; i < missing.length; i++)
           if (translated[i]) await applyTranslation(toCode, missing[i], translated[i])
@@ -597,9 +712,13 @@ function handleGlobalKey(e: KeyboardEvent) {
   }
 }
 
-onMounted(() => window.addEventListener('keydown', handleGlobalKey))
+onMounted(() => {
+  window.addEventListener('keydown', handleGlobalKey)
+  document.addEventListener('click', closeHeaderMenus)
+})
 onUnmounted(() => {
   window.removeEventListener('keydown', handleGlobalKey)
+  document.removeEventListener('click', closeHeaderMenus)
   if (sseSource) { sseSource.close(); sseSource = null }
   if (sseReconnectTimer) clearTimeout(sseReconnectTimer)
 })
@@ -608,8 +727,11 @@ onUnmounted(() => {
 
 onMounted(async () => {
   const config = await fetchConfig()
-  locales.value   = config.locales
-  projectCwd.value = config.cwd
+  locales.value      = config.locales
+  projectCwd.value   = config.cwd
+  configIgnore.value = config.ignore ?? {}
+  configRules.value  = config.rules ?? {}
+  lockedKeys.value   = config.lockedKeys ?? []
   if (!referenceLocale.value) referenceLocale.value = config.locales[0]?.code ?? ''
 
   await Promise.all(config.locales.map(async locale => {
@@ -619,11 +741,17 @@ onMounted(async () => {
     localeData.value = { ...localeData.value, [locale.code]: messages }
   }))
 
-  ;[entries.value, notes.value, { modified: modifiedLocales.value }] = await Promise.all([
+  const [entriesResult, notesResult, gitResult, staleResult] = await Promise.all([
     fetchEntries(),
     fetchNotes(),
     fetchGitStatus(),
+    fetchStale(),
   ])
+  entries.value = entriesResult
+  notes.value = notesResult
+  modifiedLocales.value = gitResult.modified
+  staleKeys.value = staleResult.staleKeys
+  staleTracking.value = staleResult.tracking
 
   loading.value = false
   connectSSE()
@@ -686,13 +814,51 @@ onMounted(async () => {
         <button class="header-icon-btn" title="Add locale" @click="openAddLocale">
           <Icon name="globe" :size="13" />
         </button>
-        <button class="header-icon-btn" title="Export CSV" @click="exportCsv">
-          <Icon name="download" :size="13" />
-        </button>
-        <label class="header-icon-btn" title="Import CSV">
-          <Icon name="upload" :size="13" />
-          <input ref="importFileEl" type="file" accept=".csv" class="sr-only" @change="handleImportFile" />
-        </label>
+        <!-- Export dropdown -->
+        <div class="header-dropdown" @click.stop>
+          <button
+            class="header-icon-btn"
+            :class="{ active: showExportMenu }"
+            title="Export"
+            @click="showExportMenu = !showExportMenu; showImportMenu = false"
+          >
+            <Icon name="download" :size="13" />
+          </button>
+          <div v-if="showExportMenu" class="header-dropdown-menu">
+            <button class="header-dropdown-item" @click="exportCsv(); showExportMenu = false">
+              <Icon name="download" :size="12" />Export CSV
+            </button>
+            <div class="header-dropdown-sep" />
+            <button class="header-dropdown-item" @click="openExportLocale('xliff')">
+              <Icon name="languages" :size="12" />Export XLIFF…
+            </button>
+            <button class="header-dropdown-item" @click="openExportLocale('po')">
+              <Icon name="languages" :size="12" />Export PO…
+            </button>
+          </div>
+        </div>
+
+        <!-- Import dropdown -->
+        <div class="header-dropdown" @click.stop>
+          <button
+            class="header-icon-btn"
+            :class="{ active: showImportMenu }"
+            title="Import"
+            @click="showImportMenu = !showImportMenu; showExportMenu = false"
+          >
+            <Icon name="upload" :size="13" />
+          </button>
+          <div v-if="showImportMenu" class="header-dropdown-menu">
+            <label class="header-dropdown-item">
+              <Icon name="upload" :size="12" />Import CSV
+              <input ref="importFileEl" type="file" accept=".csv" class="sr-only" @change="handleImportFile($event); showImportMenu = false" />
+            </label>
+            <label class="header-dropdown-item">
+              <Icon name="upload" :size="12" />Import XLIFF / PO
+              <input ref="xliffImportEl" type="file" accept=".xliff,.xlf,.po" class="sr-only" @change="handleXliffImportFile($event); showImportMenu = false" />
+            </label>
+          </div>
+        </div>
         <button class="header-icon-btn" title="Undo (Ctrl+Z)" :disabled="!undoStack.length" @click="handleUndo">
           <Icon name="undo" :size="13" />
         </button>
@@ -735,11 +901,42 @@ onMounted(async () => {
           <option value="idea">IntelliJ IDEA</option>
         </select>
 
-        <label class="settings-field-label">LibreTranslate URL</label>
-        <input v-model="libreUrl" class="settings-input" placeholder="https://libretranslate.com" />
+        <label class="settings-field-label">Translation engine</label>
+        <div class="settings-engine-toggle">
+          <button
+            class="settings-engine-btn"
+            :class="{ active: translateEngine === 'libretranslate' }"
+            @click="translateEngine = 'libretranslate'"
+          >LibreTranslate</button>
+          <button
+            class="settings-engine-btn"
+            :class="{ active: translateEngine === 'deepl' }"
+            @click="translateEngine = 'deepl'"
+          >DeepL</button>
+        </div>
 
-        <label class="settings-field-label">LibreTranslate API key <span class="settings-optional">(optional)</span></label>
-        <input v-model="libreKey" class="settings-input" placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" type="password" />
+        <template v-if="translateEngine === 'libretranslate'">
+          <label class="settings-field-label">LibreTranslate URL</label>
+          <input v-model="libreUrl" class="settings-input" placeholder="https://libretranslate.com" />
+          <label class="settings-field-label">LibreTranslate API key <span class="settings-optional">(optional)</span></label>
+          <input v-model="libreKey" class="settings-input" placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" type="password" />
+        </template>
+
+        <template v-else>
+          <label class="settings-field-label">DeepL Auth Key</label>
+          <input v-model="deeplKey" class="settings-input" placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx:fx" type="password" />
+          <label class="settings-field-label">Formality <span class="settings-optional">(DE, FR, IT, ES, NL, PL, PT, JA, RU)</span></label>
+          <select v-model="deeplFormality" class="settings-select">
+            <option value="default">Default</option>
+            <option value="more">More formal</option>
+            <option value="less">Less formal</option>
+            <option value="prefer_more">Prefer more formal</option>
+            <option value="prefer_less">Prefer less formal</option>
+          </select>
+          <p class="settings-hint">
+            Free plan: 500,000 chars/month. Keys ending in <code style="font-size:10px">:fx</code> use the free API endpoint automatically.
+          </p>
+        </template>
 
         <p class="settings-hint">
           Reference locale is used for placeholder, HTML tag, and length validation.
@@ -770,13 +967,14 @@ onMounted(async () => {
       :entries="entries"
       :duplicate-keys="duplicateKeys"
       :phantom-keys="phantomKeys"
+      :unused-keys="unusedKeys"
       @filter-namespace="handleFilterNamespace"
     />
 
     <LocaleTable
       v-else
       ref="tableRef"
-      :keys="allKeys"
+      :keys="tableKeys"
       :locales="locales"
       :locale-data="localeData"
       :entries="entries"
@@ -788,12 +986,16 @@ onMounted(async () => {
       :external-search="externalSearch"
       :duplicate-keys="duplicateKeys"
       :phantom-keys="phantomKeys"
+      :locked-keys="lockedKeys"
+      :stale-keys="staleKeys"
+      :rules="configRules"
       @save="(c, k, v) => applyTranslation(c, k, v)"
       @delete-key="handleDeleteKey"
       @delete-keys="handleBatchDeleteKeys"
       @rename-key="handleRenameKey"
       @duplicate-key="handleDuplicateKey"
       @save-note="handleSaveNote"
+      @mark-reviewed="handleMarkReviewed"
       @create-key-in-group="handleCreateKeyInGroup"
       @rename-group="handleRenameGroup"
     />
@@ -995,6 +1197,36 @@ onMounted(async () => {
       </div>
     </div>
 
+    <!-- Export XLIFF/PO -->
+    <div v-if="showExportLocale" class="overlay" @click.self="showExportLocale = false">
+      <div class="dialog">
+        <div class="dialog-header">
+          <div class="dlg-icon dlg-icon--indigo"><Icon name="languages" :size="14" /></div>
+          <p class="dialog-title">Export for translators</p>
+        </div>
+        <label class="field-label">Locale</label>
+        <div class="settings-locale-list">
+          <button v-for="locale in locales" :key="locale.code"
+            class="settings-locale-btn" :class="{ active: exportLocaleCode === locale.code }"
+            @click="exportLocaleCode = locale.code">
+            <span>{{ locale.meta?.flag ?? '🌐' }}</span>
+            <span>{{ locale.meta?.display ?? locale.code }}</span>
+            <Icon v-if="exportLocaleCode === locale.code" name="check" :size="11" class="ref-check" />
+          </button>
+        </div>
+        <label class="field-label mt">Format</label>
+        <div class="format-btns">
+          <button class="format-btn" :class="{ active: exportFormat === 'xliff' }" @click="exportFormat = 'xliff'">XLIFF</button>
+          <button class="format-btn" :class="{ active: exportFormat === 'po' }" @click="exportFormat = 'po'">PO (Gettext)</button>
+        </div>
+        <p class="field-hint-text">XLIFF is supported by most translation management systems (Lokalise, Phrase, etc.). PO is the Gettext standard used by many open-source tools.</p>
+        <div class="dialog-actions">
+          <button class="dlg-btn dlg-btn--cancel" @click="showExportLocale = false"><Icon name="close" :size="11" />Cancel</button>
+          <button class="dlg-btn dlg-btn--confirm" @click="submitExportLocale"><Icon name="download" :size="11" />Export</button>
+        </div>
+      </div>
+    </div>
+
     <!-- Translate missing -->
     <div v-if="showTranslate" class="overlay" @click.self="!translateRunning && (showTranslate = false)">
       <div class="dialog dialog--wide">
@@ -1044,7 +1276,11 @@ onMounted(async () => {
           </div>
 
           <p class="settings-hint">
-            Uses <strong>LibreTranslate</strong> (configured in Settings). Existing translations are not overwritten.
+            Uses <strong>{{ translateEngine === 'deepl' ? 'DeepL' : 'LibreTranslate' }}</strong> (configured in Settings).
+            Existing translations are not overwritten.
+            <template v-if="translateEngine === 'deepl' && deeplFormality !== 'default'">
+              Formality: <strong>{{ deeplFormality }}</strong>.
+            </template>
           </p>
         </template>
 
@@ -1160,6 +1396,24 @@ onMounted(async () => {
 .header-icon-btn:disabled { opacity: 0.3; cursor: default; }
 .header-sep { width: 1px; height: 18px; background: #27272a; margin: 0 2px; }
 
+/* ── Header dropdowns ── */
+.header-dropdown { position: relative; }
+.header-dropdown-menu {
+  position: absolute; top: calc(100% + 4px); right: 0;
+  background: #18181b; border: 1px solid #27272a; border-radius: 8px;
+  padding: 4px; min-width: 168px; z-index: 60;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.5);
+}
+.header-dropdown-item {
+  display: flex; align-items: center; gap: 7px;
+  width: 100%; padding: 6px 10px;
+  background: none; border: none; border-radius: 5px;
+  color: #a1a1aa; font-size: 12px; font-family: inherit;
+  cursor: pointer; text-align: left; white-space: nowrap; box-sizing: border-box;
+}
+.header-dropdown-item:hover { background: #27272a; color: #e4e4e7; }
+.header-dropdown-sep { height: 1px; background: #27272a; margin: 3px 4px; }
+
 .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0,0,0,0); }
 
 /* ── Settings popover ── */
@@ -1185,6 +1439,10 @@ onMounted(async () => {
   margin-top: 4px;
 }
 .settings-optional { font-weight: 400; text-transform: none; letter-spacing: 0; color: #3f3f46; }
+.settings-engine-toggle { display: flex; gap: 4px; }
+.settings-engine-btn { flex: 1; padding: 5px 8px; background: #27272a; border: 1px solid #3f3f46; border-radius: 6px; color: #71717a; font-size: 12px; cursor: pointer; transition: all 0.12s; }
+.settings-engine-btn:hover { border-color: #52525b; color: #d4d4d8; }
+.settings-engine-btn.active { background: rgba(129,140,248,0.12); border-color: rgba(129,140,248,0.35); color: #c7d2fe; }
 .settings-locale-list { display: flex; flex-direction: column; gap: 2px; }
 .settings-locale-btn {
   display: flex; align-items: center; gap: 8px;
