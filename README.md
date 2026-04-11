@@ -86,7 +86,12 @@ src/
 }
 ```
 
+> **Tip:** Run `vue-i18n-kit init` to scaffold step 1 automatically (locale files, config, Vite plugin).
+> The wizard detects your entry file and prints the ready-to-paste snippet for step 2 below.
+
 ### 2. Register the plugin
+
+This step is **always manual** — `vue-i18n-kit init` never modifies `main.ts`, it only prints the snippet so you can paste it yourself.
 
 ```ts
 // main.ts
@@ -913,21 +918,30 @@ npx vue-i18n-kit <command> [options]
 vue-i18n-kit <command> [options]
 ```
 
-### `init` — Create locale files
+### `init` — Interactive setup wizard
 
-Creates the locales directory and generates example JSON files.
+Launches an interactive wizard that scaffolds the entire localization setup.
 
 ```bash
 vue-i18n-kit init
-vue-i18n-kit init --dir src/i18n --locales en,ru,de,fr
 ```
 
-| Flag | Default | Description |
-|---|---|---|
-| `--dir <path>` | `src/locales` | Directory to create locale files in. |
-| `--locales <list>` | `en` | Comma-separated locale codes to generate. |
+**What it does:**
 
-After running, the CLI prints a ready-to-paste `main.ts` snippet.
+1. Auto-scans the project for an existing `createVueI18nPlugin` call and pre-fills locale codes as defaults.
+2. Prompts for locale codes, display names, and flag emojis.
+3. Prompts for the locales directory and toolkit directory paths.
+4. Detects `vite.config.ts` / `nuxt.config.ts` and optionally adds `vueI18nMapPlugin` automatically.
+5. Handles existing locale JSON files — keep, overwrite, or copy structure from another locale.
+6. Detects the app entry file (`src/main.ts` etc.) and checks whether `createVueI18nPlugin` is already wired up.
+   If not, asks whether to print the ready-to-paste `app.use()` snippet.
+7. Writes `i18n-kit.config.json`, `i18n-tools/locales.config.json`, locale JSON stubs.
+
+**What it does NOT do:**
+
+- Modify `main.ts` (or any other app entry file). The plugin registration (`app.use(createVueI18nPlugin({...}))`) must be added manually — see [Register the plugin](#2-register-the-plugin) above.
+
+Running `vue-i18n-kit init` on an existing project offers three choices: use the current config as-is, update settings (wizard pre-filled with current values), or reinitialize from scratch.
 
 ### `add` — Add a new locale
 
