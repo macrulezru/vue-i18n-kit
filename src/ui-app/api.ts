@@ -122,7 +122,11 @@ export async function translateMissing(params: {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(params),
   })
-  if (!res.ok) throw new Error(await res.text())
+  if (!res.ok) {
+    let msg = `HTTP ${res.status}`
+    try { const d = await res.json() as { error?: string }; if (d.error) msg = d.error } catch { /* ignore */ }
+    throw new Error(msg)
+  }
   const data = await res.json() as { translations: string[] }
   return data.translations
 }
