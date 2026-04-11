@@ -257,6 +257,51 @@ export function startUiServer(options: UiServerOptions = {}): void {
       return
     }
 
+    // ── Add locale ────────────────────────────────────────────────────────────
+    if (urlPath === '/api/locale/add' && req.method === 'POST') {
+      try {
+        const body = JSON.parse(await readBody(req)) as {
+          code: string; path: string; display?: string; flag?: string
+        }
+        const { code, path: relPath, display, flag } = body
+        if (!code || !relPath) { res.writeHead(400).end('Missing code or path'); return }
+        if (locales.find(l => l.code === code)) { res.writeHead(409).end('Locale already exists'); return }
+
+        const absPath = resolve(cwd, relPath)
+        mkdirSync(dirname(absPath), { recursive: true })
+        if (!existsSync(absPath)) writeFileSync(absPath, '{}\n', 'utf-8')
+
+        // Update i18n-kit.config.json if present
+        const config = readConfig(cwd)
+        if (config) {
+          const now = new Date().toISOString()
+          config.locales.push({
+            code, path: relPath,
+            meta: { display: display ?? code, ...(flag ? { flag } : {}) },
+            createdAt: now, updatedAt: now,
+          })
+          writeConfig(cwd, config)
+        }
+
+        // Add to in-memory list and start watching
+        const newLocale = { code, path: absPath, meta: { display: display ?? code, ...(flag ? { flag } : {}) } }
+        locales.push(newLocale)
+        let debounce: ReturnType<typeof setTimeout> | null = null
+        try {
+          fsWatch(absPath, () => {
+            if (debounce) clearTimeout(debounce)
+            debounce = setTimeout(() => broadcast({ type: 'locale-changed', code }), 250)
+          })
+        } catch { /* watch not available */ }
+
+        broadcast({ type: 'locale-added', code })
+        json(res, { ok: true, locale: newLocale })
+      } catch (e) {
+        res.writeHead(500).end('Failed to add locale')
+      }
+      return
+    }
+
     // ── Locale read/write ─────────────────────────────────────────────────────
     if (urlPath.startsWith('/api/locale/')) {
       const code = urlPath.slice('/api/locale/'.length)
@@ -485,51 +530,6 @@ export function startUiServer(options: UiServerOptions = {}): void {
         writeNotes(notes)
         json(res, { ok: true })
       } catch { res.writeHead(500).end('Failed to save note') }
-      return
-    }
-
-    // ── Add locale ────────────────────────────────────────────────────────────
-    if (urlPath === '/api/locale/add' && req.method === 'POST') {
-      try {
-        const body = JSON.parse(await readBody(req)) as {
-          code: string; path: string; display?: string; flag?: string
-        }
-        const { code, path: relPath, display, flag } = body
-        if (!code || !relPath) { res.writeHead(400).end('Missing code or path'); return }
-        if (locales.find(l => l.code === code)) { res.writeHead(409).end('Locale already exists'); return }
-
-        const absPath = resolve(cwd, relPath)
-        mkdirSync(dirname(absPath), { recursive: true })
-        if (!existsSync(absPath)) writeFileSync(absPath, '{}\n', 'utf-8')
-
-        // Update i18n-kit.config.json if present
-        const config = readConfig(cwd)
-        if (config) {
-          const now = new Date().toISOString()
-          config.locales.push({
-            code, path: relPath,
-            meta: { display: display ?? code, ...(flag ? { flag } : {}) },
-            createdAt: now, updatedAt: now,
-          })
-          writeConfig(cwd, config)
-        }
-
-        // Add to in-memory list and start watching
-        const newLocale = { code, path: absPath, meta: { display: display ?? code, ...(flag ? { flag } : {}) } }
-        locales.push(newLocale)
-        let debounce: ReturnType<typeof setTimeout> | null = null
-        try {
-          fsWatch(absPath, () => {
-            if (debounce) clearTimeout(debounce)
-            debounce = setTimeout(() => broadcast({ type: 'locale-changed', code }), 250)
-          })
-        } catch { /* watch not available */ }
-
-        broadcast({ type: 'locale-added', code })
-        json(res, { ok: true, locale: newLocale })
-      } catch (e) {
-        res.writeHead(500).end('Failed to add locale')
-      }
       return
     }
 
