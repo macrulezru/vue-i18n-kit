@@ -13,6 +13,47 @@ import type { I18nKitConfig, LocaleConfig, LocaleMeta } from '../../config/schem
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
+/** Returns the absolute path to the app entry file, or null if not found. */
+function findMainEntryFile(cwd: string): string | null {
+  const candidates = [
+    'src/main.ts', 'src/main.js', 'src/main.mts',
+    'main.ts', 'main.js',
+    'src/index.ts', 'src/index.js',
+  ]
+  for (const c of candidates) {
+    const abs = resolve(cwd, c)
+    if (existsSync(abs)) return abs
+  }
+  return null
+}
+
+/** Generates the app.use(createVueI18nPlugin({...})) snippet. */
+function buildPluginSnippet(locales: LocaleConfig[], _localesDir: string): string {
+  const defaultLocale = locales[0]?.code ?? 'en'
+  const entries = locales.map(l => {
+    const importPath = `./${l.path.replace(/\\/g, '/')}`
+    const metaEntries = Object.entries(l.meta ?? {})
+    const metaStr = metaEntries.length > 0
+      ? `\n      meta: { ${metaEntries.map(([k, v]) => `${k}: ${JSON.stringify(v)}`).join(', ')} },`
+      : ''
+    return `    ${l.code}: {\n      messages: () => import('${importPath}'),${metaStr}\n    },`
+  }).join('\n')
+
+  return [
+    `import { createVueI18nPlugin } from 'vue-i18n-kit'`,
+    ``,
+    `// In main.ts — after createApp(App), before app.mount('#app'):`,
+    `app.use(createVueI18nPlugin({`,
+    `  defaultLocale: '${defaultLocale}',`,
+    `  fallbackLocale: '${defaultLocale}',`,
+    `  locales: {`,
+    entries,
+    `  },`,
+    `  persistLocale: true,`,
+    `}))`,
+  ].join('\n')
+}
+
 function abortIfCancel(value: unknown): asserts value is string | boolean {
   if (isCancel(value)) {
     cancel('Setup cancelled.')
@@ -58,9 +99,9 @@ async function promptLocales(
   const codesRaw = await text({
     message: 'Locale codes (comma-separated, e.g.  en, ru, de)',
     placeholder: 'en, ru',
-    defaultValue: defaultCodes || undefined,
+    initialValue: defaultCodes || '',
     validate: v => {
-      const codes = v.split(',').map(s => s.trim()).filter(Boolean)
+      const codes = (v ?? '').split(',').map(s => s.trim()).filter(Boolean)
       if (codes.length === 0) return 'Enter at least one locale code.'
       const invalid = codes.find(c => !/^[a-zA-Z]{2,3}(?:-[a-zA-Z]{2,4})?$/.test(c))
       if (invalid) return `"${invalid}" is not a valid locale code (e.g. en, zh-CN).`
@@ -77,14 +118,14 @@ async function promptLocales(
     const display = await text({
       message: `Display name for "${code}"`,
       placeholder: code,
-      defaultValue: existing?.display ?? '',
-      validate: v => v.trim() === '' ? 'Display name is required.' : undefined,
+      initialValue: existing?.display || code,
+      validate: v => (v ?? '').trim() === '' ? 'Display name is required.' : undefined,
     })
     abortIfCancel(display)
 
     const flag = await text({
       message: `Flag emoji for "${code}"  (optional, press Enter to skip)`,
-      defaultValue: existing?.flag ?? '',
+      initialValue: existing?.flag ?? '',
     })
     abortIfCancel(flag)
 
@@ -300,6 +341,27 @@ async function runWizardFlow(
     }
   }
 
+  // ── Step 5b: main.ts plugin setup ────────────────────────────────────────────
+  const mainEntryFile = findMainEntryFile(cwd)
+  const mainEntryLabel = mainEntryFile
+    ? relative(cwd, mainEntryFile).replace(/\\/g, '/')
+    : 'main.ts'
+  const mainAlreadySetup = mainEntryFile
+    ? readFileSync(mainEntryFile, 'utf-8').includes('createVueI18nPlugin')
+    : false
+
+  let showMainSnippet = false
+  if (!mainAlreadySetup) {
+    const doMain = await confirm({
+      message: mainEntryFile
+        ? `${mainEntryLabel} does not have createVueI18nPlugin yet — show the setup snippet?`
+        : `No entry file detected — show the app.use() snippet to add manually?`,
+      initialValue: true,
+    })
+    abortIfCancel(doMain)
+    showMainSnippet = doMain as boolean
+  }
+
   // ── Step 6: Write everything ──────────────────────────────────────────────────
   const sp = createSpinner()
   sp.start('Writing files…')
@@ -374,6 +436,10 @@ async function runWizardFlow(
   const writtenList = written.map(f => `  ✓  ${f}`).join('\n')
   const skippedList = skipped.length > 0 ? '\n\nSkipped (kept existing):\n' + skipped.map(f => `  –  ${f}`).join('\n') : ''
   note(writtenList + skippedList, 'Files written')
+
+  if (showMainSnippet) {
+    note(buildPluginSnippet(newLocales, localesDirStr), `Add to ${mainEntryLabel}`)
+  }
 
   outro(
     `Setup complete!\n\n` +
