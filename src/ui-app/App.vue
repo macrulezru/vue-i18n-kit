@@ -636,6 +636,12 @@ function openTranslate() {
 }
 
 async function runTranslate() {
+  // Pre-flight: check engine is configured
+  if (translateEngine.value === 'deepl' && !deeplKey.value) {
+    toast('DeepL Auth Key is not set — configure it in Settings', 'error', 6000)
+    return
+  }
+
   translateRunning.value = true
   translateDone.value    = false
   translateProg.value    = 0
@@ -658,7 +664,14 @@ async function runTranslate() {
         for (let i = 0; i < missing.length; i++)
           if (translated[i]) await applyTranslation(toCode, missing[i], translated[i])
       } catch (err) {
-        toast(`Translation to ${toCode} failed: ${(err as Error).message}`, 'error', 4000)
+        const msg = (err as Error).message
+        const hint = translateEngine.value === 'libretranslate'
+          ? ' — check LibreTranslate URL and API key in Settings'
+          : ' — check DeepL Auth Key in Settings'
+        toast(`Translation to ${toCode} failed: ${msg}${hint}`, 'error', 7000)
+        translateRunning.value = false
+        translateDone.value    = false
+        return
       }
     }
     done++
@@ -1275,6 +1288,14 @@ onMounted(async () => {
             <span class="translate-prog-txt">{{ translateProg }}%</span>
           </div>
 
+          <p v-if="translateEngine === 'deepl' && !deeplKey" class="translate-warn">
+            <Icon name="warning" :size="11" />
+            DeepL Auth Key is not set. Open <strong>Settings</strong> to add it.
+          </p>
+          <p v-else-if="translateEngine === 'libretranslate' && libreUrl === 'https://libretranslate.com' && !libreKey" class="translate-warn">
+            <Icon name="warning" :size="11" />
+            The public LibreTranslate instance requires an API key. Open <strong>Settings</strong> to add it, or change the URL to a self-hosted instance.
+          </p>
           <p class="settings-hint">
             Uses <strong>{{ translateEngine === 'deepl' ? 'DeepL' : 'LibreTranslate' }}</strong> (configured in Settings).
             Existing translations are not overwritten.
@@ -1632,6 +1653,12 @@ onMounted(async () => {
   display: flex; align-items: center; gap: 8px;
   font-size: 14px; font-weight: 600; color: #4ade80;
   padding: 12px 0;
+}
+.translate-warn {
+  display: flex; align-items: flex-start; gap: 6px;
+  font-size: 12px; color: #f59e0b;
+  background: rgba(245,158,11,0.08); border: 1px solid rgba(245,158,11,0.2);
+  border-radius: 6px; padding: 8px 10px; line-height: 1.5;
 }
 
 /* ── Shortcuts ── */
