@@ -154,15 +154,18 @@ const rootCoverage = computed(() => {
       </div>
     </div>
 
-    <!-- ── Coverage score bar ─────────────────────────────────────────────── -->
-    <div class="coverage-bar-wrap">
-      <div class="coverage-bar-head">
-        <span class="coverage-label">
-          <Icon name="percent" :size="12" />
-          Overall coverage
+    <!-- ── Coverage card ────────────────────────────────────────────────────── -->
+    <section class="coverage-card">
+      <div class="coverage-card-header">
+        <span class="coverage-card-title">
+          <Icon name="percent" :size="13" />
+          Coverage
         </span>
-        <span class="coverage-pct" :class="overallCoverage === 100 ? 'pct--full' : ''">{{ overallCoverage }}%</span>
+        <span class="coverage-overall-pct" :class="overallCoverage === 100 ? 'pct--full' : ''">
+          {{ overallCoverage }}% overall
+        </span>
       </div>
+      <!-- overall bar -->
       <div class="coverage-bar">
         <div
           class="coverage-fill"
@@ -170,7 +173,45 @@ const rootCoverage = computed(() => {
           :style="{ width: overallCoverage + '%' }"
         />
       </div>
-    </div>
+      <!-- per-locale compact rows -->
+      <div class="cov-locale-grid">
+        <div
+          v-for="item in missingByLocale"
+          :key="item.locale.code"
+          class="cov-locale-row"
+        >
+          <span class="cov-locale-flag">{{ localeFlag(item.locale) ?? '' }}</span>
+          <span v-if="!localeFlag(item.locale)" class="cov-locale-flag">
+            <Icon name="globe" :size="12" />
+          </span>
+          <span class="cov-locale-name">{{ localeName(item.locale) }}</span>
+          <div class="cov-bar-wrap">
+            <div class="cov-bar">
+              <div
+                class="cov-fill"
+                :class="{
+                  'cov-fill--full':   item.missing.length === 0,
+                  'cov-fill--low':    pct(item.missing.length) < 50,
+                  'cov-fill--medium': pct(item.missing.length) >= 50 && pct(item.missing.length) < 80,
+                }"
+                :style="{ width: pct(item.missing.length) + '%' }"
+              />
+            </div>
+          </div>
+          <span
+            class="cov-pct"
+            :class="{
+              'cov-pct--full':   item.missing.length === 0,
+              'cov-pct--low':    pct(item.missing.length) < 50,
+              'cov-pct--medium': pct(item.missing.length) >= 50 && pct(item.missing.length) < 80,
+            }"
+          >{{ pct(item.missing.length) }}%</span>
+          <span v-if="item.missing.length" class="cov-missing-badge">
+            {{ item.missing.length }} missing
+          </span>
+        </div>
+      </div>
+    </section>
 
     <!-- ── Namespace progress ─────────────────────────────────────────────── -->
     <section class="panel panel--full">
@@ -409,18 +450,22 @@ const rootCoverage = computed(() => {
 .stat-card--orange .stat-value { color: #fb923c; }
 .stat-card--yellow .stat-value { color: #fbbf24; }
 
-/* ── Coverage bar ── */
-.coverage-bar-wrap {
+/* ── Coverage card ── */
+.coverage-card {
+  background: #18181b;
+  border: 1px solid #27272a;
+  border-radius: 10px;
+  padding: 16px 20px;
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 12px;
 }
-.coverage-bar-head {
+.coverage-card-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
 }
-.coverage-label {
+.coverage-card-title {
   display: flex;
   align-items: center;
   gap: 6px;
@@ -428,14 +473,14 @@ const rootCoverage = computed(() => {
   font-weight: 600;
   color: #52525b;
   text-transform: uppercase;
-  letter-spacing: 0.05em;
+  letter-spacing: 0.06em;
 }
-.coverage-pct {
+.coverage-overall-pct {
   font-size: 13px;
   font-weight: 700;
   color: #fb923c;
 }
-.coverage-pct.pct--full { color: #4ade80; }
+.coverage-overall-pct.pct--full { color: #4ade80; }
 .coverage-bar {
   height: 5px;
   background: #27272a;
@@ -449,6 +494,43 @@ const rootCoverage = computed(() => {
   transition: width 0.6s cubic-bezier(0.4,0,0.2,1);
 }
 .coverage-fill--full { background: linear-gradient(90deg, #22c55e, #4ade80); }
+
+/* per-locale rows inside coverage card */
+.cov-locale-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.cov-locale-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.cov-locale-flag { font-size: 14px; flex-shrink: 0; width: 20px; text-align: center; }
+.cov-locale-name { font-size: 12px; color: #a1a1aa; width: 110px; flex-shrink: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cov-bar-wrap { flex: 1; }
+.cov-bar { height: 6px; background: #27272a; border-radius: 3px; overflow: hidden; }
+.cov-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #818cf8, #a78bfa);
+  border-radius: 3px;
+  transition: width 0.6s cubic-bezier(0.4,0,0.2,1);
+}
+.cov-fill--full   { background: linear-gradient(90deg, #22c55e, #4ade80); }
+.cov-fill--low    { background: linear-gradient(90deg, #ef4444, #f87171); }
+.cov-fill--medium { background: linear-gradient(90deg, #f59e0b, #fbbf24); }
+.cov-pct {
+  font-size: 11px;
+  font-weight: 700;
+  color: #818cf8;
+  width: 36px;
+  text-align: right;
+  flex-shrink: 0;
+}
+.cov-pct--full   { color: #4ade80; }
+.cov-pct--low    { color: #f87171; }
+.cov-pct--medium { color: #fbbf24; }
+.cov-missing-badge { font-size: 10px; color: #52525b; flex-shrink: 0; }
 
 /* ── Namespace ── */
 .ns-grid {

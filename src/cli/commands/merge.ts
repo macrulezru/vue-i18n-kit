@@ -1,5 +1,7 @@
 import { readFileSync, writeFileSync, existsSync, readdirSync } from 'node:fs'
 import { join, resolve } from 'node:path'
+import { sortObjectKeys, matchesAnyPattern } from '../../utils/sort.js'
+import { readConfig, getLockedKeys } from '../../config/index.js'
 
 export interface MergeOptions {
   /** Source JSON file to merge from */
@@ -12,22 +14,31 @@ export interface MergeOptions {
   overwrite?: boolean
   /** Preview changes without writing files */
   dry?: boolean
+  /** Skip alphabetical sort of result (default: false — sort is applied) */
+  noSort?: boolean
 }
 
 function deepMerge(
   target: Record<string, unknown>,
   source: Record<string, unknown>,
   overwrite: boolean,
+  lockedPatterns: string[] = [],
+  prefix = '',
 ): { merged: Record<string, unknown>; added: number; skipped: number } {
   let added = 0
   let skipped = 0
 
-  function walk(t: Record<string, unknown>, s: Record<string, unknown>): void {
+  function walk(t: Record<string, unknown>, s: Record<string, unknown>, pfx: string): void {
     for (const [k, v] of Object.entries(s)) {
+      const fullKey = pfx ? `${pfx}.${k}` : k
       if (v !== null && typeof v === 'object' && !Array.isArray(v)) {
         if (typeof t[k] !== 'object' || t[k] === null) t[k] = {}
-        walk(t[k] as Record<string, unknown>, v as Record<string, unknown>)
+        walk(t[k] as Record<string, unknown>, v as Record<string, unknown>, fullKey)
       } else {
+        if (lockedPatterns.length > 0 && matchesAnyPattern(fullKey, lockedPatterns) && k in t) {
+          skipped++
+          continue
+        }
         if (k in t) {
           if (overwrite) { t[k] = v; added++ } else { skipped++ }
         } else {
@@ -38,12 +49,16 @@ function deepMerge(
   }
 
   const merged = JSON.parse(JSON.stringify(target)) as Record<string, unknown>
-  walk(merged, source)
+  walk(merged, source, prefix)
   return { merged, added, skipped }
 }
 
 export function runMerge(options: MergeOptions): void {
-  const { source, dir, locale, overwrite = false, dry = false } = options
+  const { source, dir, locale, overwrite = false, dry = false, noSort = false } = options
+
+  // Locked keys from base config — never overwrite them even with --overwrite
+  const config = readConfig(process.cwd())
+  const lockedPatterns: string[] = config ? getLockedKeys(process.cwd(), config) : []
 
   const sourcePath = resolve(source)
   if (!existsSync(sourcePath)) {
@@ -89,7 +104,7 @@ export function runMerge(options: MergeOptions): void {
       }
     }
 
-    const { merged, added, skipped } = deepMerge(target, sourceData, overwrite)
+    const { merged, added, skipped } = deepMerge(target, sourceData, overwrite, lockedPatterns)
 
     if (added === 0 && skipped === 0) {
       console.log(`  ○ ${code}: nothing to merge`)
@@ -101,7 +116,8 @@ export function runMerge(options: MergeOptions): void {
     console.log(`  ${dry ? '~' : '✓'} ${code}: +${added} added, ${skipped} skipped ${status}`)
 
     if (!dry) {
-      writeFileSync(filePath, JSON.stringify(merged, null, 2) + '\n', 'utf-8')
+      const result = noSort ? merged : sortObjectKeys(merged)
+      writeFileSync(filePath, JSON.stringify(result, null, 2) + '\n', 'utf-8')
     }
   }
 

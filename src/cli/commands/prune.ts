@@ -1,6 +1,8 @@
 import { readFileSync, writeFileSync, existsSync, readdirSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { buildEntriesMap } from '../../utils/scanner.js'
+import { matchesAnyPattern } from '../../utils/sort.js'
+import { readConfig, getLockedKeys } from '../../config/index.js'
 
 export interface PruneOptions {
   /** Locales directory */
@@ -13,6 +15,8 @@ export interface PruneOptions {
   yes?: boolean
   /** Path to pre-built entries JSON (skip scanning) */
   entriesFile?: string
+  /** Keys to never remove, even if not found in code — supports glob */
+  ignore?: string[]
 }
 
 function flattenKeys(obj: Record<string, unknown>, prefix = ''): string[] {
@@ -51,6 +55,15 @@ function removeEmptyObjects(obj: Record<string, unknown>): void {
 export function runPrune(options: PruneOptions): void {
   const { dir, cwd, dry = false, entriesFile } = options
 
+  // Merge ignore patterns from options and i18n-kit.config.json
+  const config = readConfig(cwd)
+  const lockedPatterns: string[] = config ? getLockedKeys(cwd, config) : []
+  const ignorePatterns: string[] = [
+    ...(options.ignore ?? []),
+    ...(config?.ignore?.prune ?? []),
+    ...lockedPatterns,
+  ]
+
   if (!existsSync(dir)) {
     console.error(`✗ Locales directory not found: ${dir}`)
     process.exit(1)
@@ -65,11 +78,14 @@ export function runPrune(options: PruneOptions): void {
     usedKeys = new Set(Object.keys(entries))
   } else {
     console.log('Scanning source files…')
-    const entries = buildEntriesMap(cwd)
+    const scanExclude = config?.ignore?.scanExclude ?? []
+    const entries = buildEntriesMap(cwd, scanExclude)
     usedKeys = new Set(Object.keys(entries))
   }
 
-  console.log(`Found ${usedKeys.size} keys in code.\n`)
+  console.log(`Found ${usedKeys.size} keys in code.`)
+  if (ignorePatterns.length) console.log(`Ignoring patterns: ${ignorePatterns.join(', ')}`)
+  console.log()
 
   const files = readdirSync(dir).filter(f => f.endsWith('.json'))
   if (!files.length) { console.log('No locale files found.'); return }
@@ -89,7 +105,9 @@ export function runPrune(options: PruneOptions): void {
     }
 
     const allKeys = flattenKeys(data)
-    const toRemove = allKeys.filter(k => !usedKeys.has(k))
+    const toRemove = allKeys.filter(k =>
+      !usedKeys.has(k) && (ignorePatterns.length === 0 || !matchesAnyPattern(k, ignorePatterns))
+    )
 
     if (!toRemove.length) {
       console.log(`  ○ ${code}: nothing to prune`)
