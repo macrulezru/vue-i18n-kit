@@ -11,6 +11,101 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.4.0] — 2026-04-12
+
+### Added
+
+#### CLI — `split` command (namespace code splitting)
+- New `vue-i18n-kit split` command — splits a flat `<locale>.json` into per-namespace files (`en/auth.json`, `en/dashboard.json`, etc.)
+- `--dir <path>` — source locales directory
+- `--out <path>` — output directory for namespace files (default: `<dir>/split`)
+
+#### CLI — `merge-ns` command (inverse of split)
+- New `vue-i18n-kit merge-ns` command — reassembles namespace files back into a single flat `<locale>.json`
+
+#### Vite plugin — `vueI18nNamespacePlugin` (lazy namespace loading)
+- New plugin that registers each namespace as a separate dynamic chunk
+- Namespaces are loaded on demand as the user navigates between routes, reducing initial bundle size
+- Configured via `i18n-kit.config.json` — set `namespaces: true` to enable namespace mode for both the runtime and the editor
+
+#### Init wizard — `vueI18nDevPlugin` auto-setup
+- The `vue-i18n-kit init` wizard now asks whether to add `vueI18nDevPlugin` to `vite.config.ts`
+- Import is merged into an existing `import { … } from 'vue-i18n-kit/vite'` line when one is already present (avoids duplicate imports)
+- Final output now shows the complete `main.ts` snippet **without a box border** (easier to copy), followed by a separate block with the in-context editor registration code
+
+#### In-context editing — `vueI18nDevPlugin`
+- New Vite plugin `vueI18nDevPlugin` — active only in `serve` mode; fully inert in `build`
+- Injects a `DevOverlay` root app into `document.body` via a virtual module
+- Exposes `I18nInspect` component and `vI18nInspect` directive as `window.__I18N_KIT_INSPECT_COMPONENT__` / `window.__I18N_KIT_INSPECT_DIRECTIVE__` globals for registration in the host app's `main.ts`
+- `uiUrl` option — URL of the running `vue-i18n-kit ui` server (default: `http://localhost:4173`)
+- `autoWrap` option — enable/disable automatic `t()` wrapping in `.vue` templates (default: `true`)
+- `iframeWidth` option — width of the inline iframe editor panel (default: `100vw`)
+
+#### In-context editing — `I18nInspect` component
+- New dev-only component `<I18nInspect i18n-key="nav.home">{{ t('nav.home') }}</I18nInspect>`
+- Renders the slot content as-is plus a pencil icon that appears on hover
+- Clicking the icon opens the `DevOverlay` popup pre-filled with the key and all locale values
+- Styles are fully scoped with `__ik-` prefixed class names — no conflicts with host app styles
+
+#### In-context editing — `DevOverlay` popup
+- Floating popup mounted independently on `document.body` (separate Vue app)
+- Loads all locale values for the clicked key from the running UI server (`GET /api/locale/:code`)
+- Editable textarea per locale with dirty tracking — only changed locales are sent on save (`PUT /api/locale/:code`)
+- Vite HMR picks up the saved JSON change and hot-reloads the locale in the host app automatically
+- Header: key badge, `Ctrl+Enter` / `Cmd+Enter` to save, `Esc` to close, open-in-editor button
+- Backdrop click closes the popup; scroll of the host page is blocked while the popup is open
+- Dark theme matching the main editor UI: `#18181b` background, `#818cf8` indigo accent, zinc palette
+
+#### In-context editing — Vite transform (auto-wrap)
+- `transform` hook in `vueI18nDevPlugin` rewrites `.vue` files in dev mode
+- Finds all `{{ t('key') }}` / `{{ $t('key') }}` / `{{ tm('key') }}` interpolations with **literal string keys** and wraps them: `{{ t('key') }}` → `<I18nInspect i18n-key="key">{{ t('key') }}</I18nInspect>`
+- Dynamic keys (`t(someVar)`) are left untouched — use `v-i18n-inspect` for those
+- Attribute bindings (`:placeholder="t('key')"`) are not transformed (limitation by design)
+- Transform runs lazily on first request per file (Vite's module graph); navigating to a route triggers transform for components on that route
+
+#### In-context editing — `v-i18n-inspect` directive (dynamic keys)
+- New `vI18nInspect` directive for cases where the translation key is dynamic at runtime
+- Usage: `<span v-i18n-inspect="myKey">{{ t(myKey) }}</span>` or inside `v-for`
+- `mounted` hook attaches hover listeners; `updated` hook tracks binding value changes; `unmounted` cleans up
+- On hover: adds `__ik-w--on` outline and renders an absolutely positioned pencil button inside the element
+- In production — directive is never registered, `v-i18n-inspect` attributes are silently ignored by Vue (no warnings, zero bundle impact)
+
+#### In-context editing — `DevOverlay` iframe panel
+- The open-in-editor button in the popup now opens the full UI editor as a side panel **inside the current tab** instead of a new browser window
+- The iframe panel overlays the right side of the page; the application remains visible and interactive behind it
+- Panel header (rendered outside the iframe, in `DevOverlay`):
+  - **×** — closes the panel, restores normal DevOverlay mode
+  - **↗ Open in new tab** — `window.open` with the same URL, then closes the panel
+- If the popup is opened for a different key while the iframe panel is already visible, the iframe `src` is updated in place (no full panel close/reopen)
+- `Escape` closes the popup first; a second `Escape` closes the iframe panel
+- Scroll of the host page is blocked while either the popup or the iframe panel is open
+
+#### In-context editing — `vue-i18n-kit dev` command
+- New `vue-i18n-kit dev` command — starts the host app dev server and `vue-i18n-kit ui` in parallel
+- Auto-detects the project's dev command from `package.json` `scripts.dev`
+- `--ui-port <n>` — port for the UI server (default: `4173`)
+
+#### UI — namespace mode
+- In `namespaces: true` projects, each namespace appears as a separate pill-filter tab in the editor toolbar
+- Switching tabs filters the key table to that namespace
+
+#### UI — translation memory
+- Editor cells show fuzzy-match suggestions from `i18n-kit.memory.json` when entering edit mode
+- One-click **Apply** chip inserts a past translation
+- Settings panel: **Clear memory** and **Export memory** buttons
+- `memory: { enabled: false }` in `i18n-kit.config.json` disables the feature entirely
+
+#### Config — `namespaces` field
+- New boolean field in `i18n-kit.config.json` — enables namespace splitting mode
+
+#### Config — `memory` field
+- New optional field in `i18n-kit.config.json`: `memory.enabled` (default: `true`)
+
+### Changed
+- `vue-i18n-kit init` final step no longer wraps the `app.use()` code in a bordered box — the snippet is printed as plain indented text for easier copy-paste
+
+---
+
 ## [0.3.0] — 2026-04-05
 
 ### Added
