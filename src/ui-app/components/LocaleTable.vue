@@ -3,7 +3,8 @@ import { ref, computed, nextTick, watch } from 'vue'
 import Icon from './Icon.vue'
 import Checkbox from './Checkbox.vue'
 import { usePersisted } from '../composables/usePersisted'
-import type { LocaleInfo, LocaleData, LocaleEntries, I18nKitRules } from '../api'
+import type { LocaleInfo, LocaleData, LocaleEntries, I18nKitRules, MemorySuggestion } from '../api'
+import { fetchMemorySuggestions, saveMemoryEntry } from '../api'
 
 const props = defineProps<{
   keys: string[]
@@ -21,6 +22,8 @@ const props = defineProps<{
   lockedKeys?: string[]
   staleKeys?: string[]
   rules?: I18nKitRules
+  memoryEnabled?: boolean
+  namespacesMode?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -38,6 +41,19 @@ const emit = defineEmits<{
 // ── Persisted state ───────────────────────────────────────────────────────────
 
 const density = usePersisted<'compact' | 'default' | 'relaxed'>('i18nkit:density', 'default')
+
+// ── Namespace mode ────────────────────────────────────────────────────────────
+
+const activeNamespace = ref<string | null>(null)
+
+const topNamespaces = computed(() => {
+  const seen = new Set<string>()
+  for (const key of props.keys) {
+    const dot = key.indexOf('.')
+    if (dot > 0) seen.add(key.slice(0, dot))
+  }
+  return [...seen].sort()
+})
 
 // ── Toolbar ───────────────────────────────────────────────────────────────────
 
@@ -160,6 +176,11 @@ function buildRenderRows(keys: string[], prefix: string, depth: number): RenderR
 }
 
 function keyPassesFilters(key: string): boolean {
+  // Namespace filter
+  if (activeNamespace.value) {
+    const ns = activeNamespace.value
+    if (key !== ns && !key.startsWith(ns + '.')) return false
+  }
   const q = search.value.toLowerCase()
   if (q) {
     const inKey    = key.toLowerCase().includes(q)
@@ -258,9 +279,29 @@ function toggleKey(key: string) { selectedKey.value = selectedKey.value === key 
 
 // ── Inline editing ────────────────────────────────────────────────────────────
 
-const editingCell  = ref<{ key: string; code: string } | null>(null)
+const editingCell  = ref<{ key: string; code: string; originalValue: string } | null>(null)
 const editingValue = ref('')
 const editInputEl  = ref<HTMLTextAreaElement | HTMLTextAreaElement[] | null>(null)
+
+// ── Translation memory ────────────────────────────────────────────────────────
+const memorySuggestions = ref<MemorySuggestion[]>([])
+const memoryLoading     = ref(false)
+
+async function loadMemorySuggestions(key: string, code: string) {
+  if (!props.memoryEnabled || code === props.referenceLocale) { memorySuggestions.value = []; return }
+  const refValue = props.localeData[props.referenceLocale]?.[key]
+  if (!refValue) { memorySuggestions.value = []; return }
+  memoryLoading.value = true
+  try { memorySuggestions.value = await fetchMemorySuggestions(refValue, props.referenceLocale, code) }
+  catch { memorySuggestions.value = [] }
+  finally { memoryLoading.value = false }
+}
+
+function applyMemorySuggestion(target: string) {
+  editingValue.value = target
+  const el = getEditEl()
+  if (el) { el.focus(); autoResize(el) }
+}
 
 function autoResize(el: HTMLTextAreaElement) { el.style.height = 'auto'; el.style.height = Math.min(el.scrollHeight, 200) + 'px' }
 
@@ -271,14 +312,29 @@ function getEditEl(): HTMLTextAreaElement | null {
 }
 
 function startEdit(key: string, code: string, currentValue: string) {
-  editingCell.value = { key, code }; editingValue.value = currentValue
+  editingCell.value = { key, code, originalValue: currentValue }
+  editingValue.value = currentValue
+  memorySuggestions.value = []
+  loadMemorySuggestions(key, code)
   nextTick(() => { const el = getEditEl(); if (el) { el.focus(); autoResize(el) } })
 }
-function cancelEdit() { editingCell.value = null; editingValue.value = '' }
+function cancelEdit() { editingCell.value = null; editingValue.value = ''; memorySuggestions.value = [] }
 function confirmEdit() {
   if (!editingCell.value) return
-  emit('save', editingCell.value.code, editingCell.value.key, editingValue.value)
-  editingCell.value = null; editingValue.value = ''
+  const { code, key } = editingCell.value
+  const newValue = editingValue.value
+  emit('save', code, key, newValue)
+
+  // Save to translation memory if the value changed and it's a translation locale
+  if (props.memoryEnabled && code !== props.referenceLocale && newValue && newValue !== editingCell.value.originalValue) {
+    const refValue = props.localeData[props.referenceLocale]?.[key]
+    if (refValue) {
+      saveMemoryEntry({ source: refValue, sourceLocale: props.referenceLocale, target: newValue, targetLocale: code, key })
+        .catch(() => { /* fire and forget */ })
+    }
+  }
+
+  editingCell.value = null; editingValue.value = ''; memorySuggestions.value = []
 }
 function onEditKeydown(e: KeyboardEvent) {
   if (e.key === 'Escape') { e.preventDefault(); cancelEdit() }
@@ -419,7 +475,7 @@ function jumpToKey(key: string) {
     el?.scrollIntoView({ behavior: 'smooth', block: 'center' })
   })
 }
-defineExpose({ jumpToKey })
+defineExpose({ jumpToKey, startEdit })
 
 // ── Copy locale JSON ──────────────────────────────────────────────────────────
 
@@ -675,6 +731,17 @@ function fileUrl(file: string): string {
     </span>
   </div>
 
+  <!-- ── Namespace filter bar (only in namespace mode) ──────────────────── -->
+  <div v-if="namespacesMode && topNamespaces.length > 1" class="ns-bar">
+    <button class="ns-pill" :class="{ 'ns-pill--active': !activeNamespace }" @click="activeNamespace = null">
+      All
+    </button>
+    <button v-for="ns in topNamespaces" :key="ns"
+      class="ns-pill" :class="{ 'ns-pill--active': activeNamespace === ns }" @click="activeNamespace = ns">
+      {{ ns }}
+    </button>
+  </div>
+
   <!-- ── Table ────────────────────────────────────────────────────────────── -->
   <div ref="tableWrapEl" class="table-wrap" :class="'density-' + density" tabindex="0" @keydown="handleTableKeydown">
     <div v-if="filteredKeys.length === 0" class="empty">
@@ -775,6 +842,16 @@ function fileUrl(file: string): string {
                 <div v-if="isEditing(row.key, locale.code)" class="edit-wrap">
                   <textarea ref="editInputEl" v-model="editingValue" class="edit-input" rows="1"
                     @input="autoResize($event.target as HTMLTextAreaElement)" @keydown="onEditKeydown" />
+                  <!-- Memory suggestions -->
+                  <div v-if="memorySuggestions.length" class="memory-suggestions">
+                    <span class="memory-label"><Icon name="wand" :size="9" />Memory</span>
+                    <button v-for="s in memorySuggestions" :key="s.target"
+                      class="memory-chip" :title="`${Math.round(s.similarity * 100)}% match · key: ${s.key}`"
+                      @click.stop="applyMemorySuggestion(s.target)">
+                      <span class="memory-pct">{{ Math.round(s.similarity * 100) }}%</span>
+                      <span class="memory-text">{{ s.target }}</span>
+                    </button>
+                  </div>
                   <div class="edit-btns">
                     <button class="btn-confirm" title="Save (Enter)" @click="confirmEdit"><Icon name="check" :size="12" /></button>
                     <button class="btn-cancel"  title="Cancel (Esc)" @click="cancelEdit"><Icon name="close" :size="11" /></button>
@@ -1301,4 +1378,18 @@ tr.detail-row td { padding: 0; border-bottom: 1px solid #27272a; background: #0f
 .field-input:focus { border-color: #818cf8; }
 .field-textarea { resize: vertical; min-height: 64px; font-family: inherit; }
 .field-error { display: flex; align-items: center; gap: 5px; font-size: 12px; color: #f87171; }
+
+/* ── Namespace filter bar ── */
+.ns-bar { display: flex; flex-wrap: wrap; gap: 6px; padding: 8px 12px; border-bottom: 1px solid #1f1f23; background: #101012; }
+.ns-pill { font-size: 11px; font-weight: 500; color: #71717a; background: #18181b; border: 1px solid #27272a; border-radius: 20px; padding: 3px 10px; cursor: pointer; transition: color 0.12s, background 0.12s, border-color 0.12s; }
+.ns-pill:hover { color: #a1a1aa; border-color: #3f3f46; }
+.ns-pill--active { color: #818cf8; background: rgba(129,140,248,0.1); border-color: rgba(129,140,248,0.3); }
+
+/* ── Translation memory suggestions ── */
+.memory-suggestions { display: flex; flex-wrap: wrap; align-items: center; gap: 5px; padding: 4px 0 2px; }
+.memory-label { display: flex; align-items: center; gap: 4px; font-size: 10px; color: #52525b; flex-shrink: 0; }
+.memory-chip { display: flex; align-items: center; gap: 4px; background: #1c1c1f; border: 1px solid #27272a; border-radius: 4px; padding: 2px 7px; cursor: pointer; max-width: 240px; transition: border-color 0.1s; }
+.memory-chip:hover { border-color: #818cf8; }
+.memory-pct { font-size: 9px; font-weight: 700; color: #818cf8; flex-shrink: 0; }
+.memory-text { font-size: 11px; color: #d4d4d8; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 </style>

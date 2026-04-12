@@ -362,6 +362,48 @@ function addImport(content: string): string {
   return "import { vueI18nMapPlugin } from 'vue-i18n-kit/vite'\n\n" + content
 }
 
+/**
+ * Merges `vueI18nDevPlugin` into an existing `import { … } from 'vue-i18n-kit/vite'` line,
+ * or adds a new import line after the last existing import.
+ */
+function addDevPluginImport(content: string): string {
+  // Find an existing import from 'vue-i18n-kit/vite' (single or double quotes)
+  const importLineRE = /^(import\s*\{)([^}]+)(\}\s*from\s*['"]vue-i18n-kit\/vite['"].*)/m
+  const m = content.match(importLineRE)
+  if (m && m.index !== undefined) {
+    if (m[2].includes('vueI18nDevPlugin')) return content // already present
+    const newLine = m[1] + m[2].trimEnd() + ', vueI18nDevPlugin ' + m[3]
+    return content.slice(0, m.index) + newLine + content.slice(m.index + m[0].length)
+  }
+  // No 'vue-i18n-kit/vite' import yet — add new line after last import
+  const importMatches = [...content.matchAll(/^import .+$/gm)]
+  if (importMatches.length > 0) {
+    const last = importMatches[importMatches.length - 1]
+    const insertAt = last.index! + last[0].length
+    return (
+      content.slice(0, insertAt) +
+      "\nimport { vueI18nDevPlugin } from 'vue-i18n-kit/vite'" +
+      content.slice(insertAt)
+    )
+  }
+  return "import { vueI18nDevPlugin } from 'vue-i18n-kit/vite'\n\n" + content
+}
+
+/** Inserts `vueI18nDevPlugin()` before the closing `]` of the plugins array. */
+function insertDevPluginAtEndOfPluginsArray(
+  content: string,
+  pluginsMatch: RegExpMatchArray,
+  outerIndent: string,
+): string {
+  const bracketIdx = pluginsMatch.index! + pluginsMatch[0].length - 1
+  const closeBracketIdx = findMatchingClose(content, bracketIdx)
+  if (closeBracketIdx === -1) return content
+
+  let insertPos = closeBracketIdx
+  while (insertPos > 0 && content[insertPos - 1] !== '\n') insertPos--
+  return content.slice(0, insertPos) + outerIndent + 'vueI18nDevPlugin(),' + '\n' + content.slice(insertPos)
+}
+
 /** Inserts `pluginCall` before the closing `]` of the plugins array. */
 function insertAtEndOfPluginsArray(content: string, pluginsMatch: RegExpMatchArray, outerIndent: string, locales: DiscoveredLocale[]): string {
   const bracketIdx = pluginsMatch.index! + pluginsMatch[0].length - 1
@@ -451,6 +493,37 @@ export function updateConfig(configPath: string, kind: ConfigKind, locales: Disc
         const viteBlock = `\n  vite: {\n    plugins: [\n      ${pluginCall},\n    ],\n  },`
         content = content.slice(0, nuxtInnerIdx + 1) + viteBlock + content.slice(nuxtInnerIdx + 1)
       }
+    }
+  }
+
+  writeFileSync(configPath, content, 'utf-8')
+}
+
+/**
+ * Adds `vueI18nDevPlugin()` to the vite/nuxt config.
+ * - Merges the import into an existing `vue-i18n-kit/vite` import, or adds a new one.
+ * - Inserts the plugin call at the end of the plugins array.
+ * - No-ops if `vueI18nDevPlugin(` is already present.
+ */
+export function updateDevPlugin(configPath: string, kind: ConfigKind): void {
+  let content = readFileSync(configPath, 'utf-8')
+
+  if (content.includes('vueI18nDevPlugin(')) return // already present
+
+  content = addDevPluginImport(content)
+
+  if (kind === 'vite') {
+    const pluginsMatch = content.match(/plugins\s*:\s*\[/)
+    if (!pluginsMatch || pluginsMatch.index === undefined) {
+      console.warn('[vue-i18n-kit] Could not find plugins: [ — skipping dev plugin insert')
+      return
+    }
+    content = insertDevPluginAtEndOfPluginsArray(content, pluginsMatch, '    ')
+  } else {
+    // Nuxt — insert into vite.plugins if it exists (structure was likely created by updateConfig)
+    const pluginsMatch = content.match(/plugins\s*:\s*\[/)
+    if (pluginsMatch) {
+      content = insertDevPluginAtEndOfPluginsArray(content, pluginsMatch, '      ')
     }
   }
 

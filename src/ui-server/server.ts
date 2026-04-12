@@ -138,7 +138,8 @@ function serveFile(res: ServerResponse, filePath: string): boolean {
 export function startUiServer(options: UiServerOptions = {}): void {
   const { cwd = process.cwd(), port = 4173 } = options
   const publicDir  = join(__dirname, '..', 'ui-server', 'public')
-  const notesPath  = join(cwd, 'i18n-kit.notes.json')
+  const notesPath   = join(cwd, 'i18n-kit.notes.json')
+  const memoryPath  = join(cwd, 'i18n-kit.memory.json')
   const entriesPath = join(cwd, 'i18n-tools', 'locales.entries.json')
 
   const localesResult = readLocalesForServer(cwd)
@@ -226,6 +227,48 @@ export function startUiServer(options: UiServerOptions = {}): void {
     writeFileSync(notesPath, JSON.stringify(notes, null, 2) + '\n', 'utf-8')
   }
 
+  // ── Translation memory helpers ────────────────────────────────────────────
+
+  interface MemoryEntry {
+    source: string
+    sourceLocale: string
+    target: string
+    targetLocale: string
+    key: string
+    savedAt: string
+  }
+
+  function readMemory(): MemoryEntry[] {
+    if (!existsSync(memoryPath)) return []
+    try { return JSON.parse(readFileSync(memoryPath, 'utf-8')) as MemoryEntry[] } catch { return [] }
+  }
+  function writeMemory(entries: MemoryEntry[]): void {
+    writeFileSync(memoryPath, JSON.stringify(entries, null, 2) + '\n', 'utf-8')
+  }
+
+  /** Bigram-based string similarity: 0..1 */
+  function stringSimilarity(a: string, b: string): number {
+    if (!a || !b) return 0
+    if (a === b) return 1
+    const al = a.toLowerCase().trim()
+    const bl = b.toLowerCase().trim()
+    if (al === bl) return 1
+    const bigrams = (s: string): Map<string, number> => {
+      const m = new Map<string, number>()
+      for (let i = 0; i < s.length - 1; i++) {
+        const bg = s.slice(i, i + 2); m.set(bg, (m.get(bg) ?? 0) + 1)
+      }
+      return m
+    }
+    const ba = bigrams(al), bb = bigrams(bl)
+    let intersection = 0
+    for (const [bg, cnt] of ba) intersection += Math.min(cnt, bb.get(bg) ?? 0)
+    const total = al.length - 1 + (bl.length - 1)
+    return total > 0 ? (2 * intersection) / total : 0
+  }
+
+  const memoryEnabled: boolean = kitConfig?.memory?.enabled !== false
+
   // ── Request handler ───────────────────────────────────────────────────────
 
   const server = createServer(async (req: IncomingMessage, res: ServerResponse) => {
@@ -253,7 +296,7 @@ export function startUiServer(options: UiServerOptions = {}): void {
 
     // ── Config ────────────────────────────────────────────────────────────────
     if (urlPath === '/api/config') {
-      json(res, { locales, cwd, rules: configRules, ignore: configIgnore, lockedKeys })
+      json(res, { locales, cwd, rules: configRules, ignore: configIgnore, lockedKeys, memoryEnabled, namespacesMode: kitConfig?.namespaces ?? false })
       return
     }
 
@@ -705,6 +748,69 @@ export function startUiServer(options: UiServerOptions = {}): void {
       } catch { res.writeHead(500).end('Failed to export CSV') }
       return
     }
+
+    // ── Translation memory ────────────────────────────────────────────────────
+    if (urlPath === '/api/memory/export') {
+      if (!memoryEnabled) { json(res, { error: 'Memory disabled' }, 403); return }
+      const entries = readMemory()
+      res.writeHead(200, {
+        'Content-Type': 'application/json',
+        'Content-Disposition': 'attachment; filename="i18n-kit.memory.json"',
+        'Access-Control-Allow-Origin': '*',
+      })
+      res.end(JSON.stringify(entries, null, 2))
+      return
+    }
+
+    if (urlPath === '/api/memory' && req.method === 'GET') {
+      if (!memoryEnabled) { json(res, { suggestions: [] }); return }
+      const qs = new URLSearchParams((req.url ?? '').split('?')[1] ?? '')
+      const source = qs.get('source') ?? ''
+      const from   = qs.get('from') ?? ''
+      const to     = qs.get('to') ?? ''
+
+      if (!source || !from || !to) { json(res, { suggestions: [] }); return }
+
+      const entries = readMemory().filter(e => e.sourceLocale === from && e.targetLocale === to)
+      const suggestions = entries
+        .map(e => ({ target: e.target, key: e.key, similarity: stringSimilarity(source, e.source) }))
+        .filter(s => s.similarity >= 0.5)
+        .sort((a, b) => b.similarity - a.similarity)
+        .slice(0, 5)
+
+      json(res, { suggestions })
+      return
+    }
+
+    if (urlPath === '/api/memory' && req.method === 'POST') {
+      if (!memoryEnabled) { json(res, { ok: true }); return }
+      try {
+        const body = JSON.parse(await readBody(req)) as Partial<MemoryEntry>
+        const { source, sourceLocale, target, targetLocale, key } = body
+        if (!source || !sourceLocale || !target || !targetLocale || !key) {
+          json(res, { error: 'Missing required fields' }, 400); return
+        }
+        const entries = readMemory()
+        // Upsert: replace existing entry for same source+sourceLocale+targetLocale+key
+        const idx = entries.findIndex(
+          e => e.key === key && e.sourceLocale === sourceLocale && e.targetLocale === targetLocale
+        )
+        const newEntry: MemoryEntry = { source, sourceLocale, target, targetLocale, key, savedAt: new Date().toISOString() }
+        if (idx >= 0) entries[idx] = newEntry; else entries.push(newEntry)
+        writeMemory(entries)
+        json(res, { ok: true })
+      } catch { json(res, { error: 'Failed to save memory entry' }, 500) }
+      return
+    }
+
+    if (urlPath === '/api/memory' && req.method === 'DELETE') {
+      if (!memoryEnabled) { json(res, { ok: true }); return }
+      try { writeMemory([]); json(res, { ok: true }) } catch { json(res, { error: 'Failed to clear memory' }, 500) }
+      return
+    }
+
+    // ── Config: expose memory setting ─────────────────────────────────────────
+    // (already served by /api/config above — no extra endpoint needed)
 
     // ── Static UI ─────────────────────────────────────────────────────────────
     if (urlPath !== '/' && serveFile(res, join(publicDir, urlPath))) return

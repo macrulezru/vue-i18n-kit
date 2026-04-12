@@ -26,6 +26,14 @@ export interface LocaleConfig {
   rules?: I18nKitRules
   ignore?: I18nKitIgnore
   lockedKeys?: string[]
+  memoryEnabled?: boolean
+  namespacesMode?: boolean
+}
+
+export interface MemorySuggestion {
+  target: string
+  key: string
+  similarity: number
 }
 
 export type LocaleMessages = Record<string, string>
@@ -203,4 +211,40 @@ export async function addLocale(params: {
     body: JSON.stringify(params),
   })
   if (!res.ok) throw new Error(await res.text())
+}
+
+// ── Translation memory ────────────────────────────────────────────────────────
+
+export async function fetchMemorySuggestions(
+  source: string,
+  from: string,
+  to: string,
+): Promise<MemorySuggestion[]> {
+  const params = new URLSearchParams({ source, from, to })
+  const res = await fetch(`/api/memory?${params}`)
+  if (!res.ok) return []
+  const data = await res.json() as { suggestions: MemorySuggestion[] }
+  return data.suggestions ?? []
+}
+
+export async function saveMemoryEntry(params: {
+  source: string
+  sourceLocale: string
+  target: string
+  targetLocale: string
+  key: string
+}): Promise<void> {
+  await fetch('/api/memory', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(params),
+  })
+}
+
+export async function clearMemory(): Promise<void> {
+  await fetch('/api/memory', { method: 'DELETE' })
+}
+
+export function exportMemoryUrl(): string {
+  return '/api/memory/export'
 }

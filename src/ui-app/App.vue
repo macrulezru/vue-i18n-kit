@@ -13,6 +13,7 @@ import {
   exportXliff, exportPo, importTranslations,
   createKey, deleteKey, renameKey, duplicateKey, saveNote,
   batchDeleteKeys, sortKeys, translateMissing, addLocale,
+  clearMemory, exportMemoryUrl,
 } from './api'
 import type { LocaleInfo, LocaleData, LocaleEntries, I18nKitIgnore, I18nKitRules } from './api'
 
@@ -41,6 +42,8 @@ const configRules     = ref<I18nKitRules>({})
 const lockedKeys      = ref<string[]>([])
 const staleKeys       = ref<string[]>([])
 const staleTracking   = ref(false)
+const memoryEnabled   = ref(true)
+const namespacesMode  = ref(false)
 
 // Auto-save indicator
 const isSaving  = ref(0)
@@ -745,6 +748,8 @@ onMounted(async () => {
   configIgnore.value = config.ignore ?? {}
   configRules.value  = config.rules ?? {}
   lockedKeys.value   = config.lockedKeys ?? []
+  memoryEnabled.value  = config.memoryEnabled !== false
+  namespacesMode.value = config.namespacesMode ?? false
   if (!referenceLocale.value) referenceLocale.value = config.locales[0]?.code ?? ''
 
   await Promise.all(config.locales.map(async locale => {
@@ -768,6 +773,27 @@ onMounted(async () => {
 
   loading.value = false
   connectSSE()
+
+  // ── Deep-link: ?key=nav.home&edit=en ─────────────────────────────────────
+  // Set by DevOverlay "Open in full editor" button. Jump to the key and
+  // optionally open it in edit mode for the specified locale.
+  const params   = new URLSearchParams(location.search)
+  const deepKey  = params.get('key')
+  const deepEdit = params.get('edit')
+
+  if (deepKey) {
+    // Clean up URL so a page refresh doesn't re-trigger the deep-link
+    history.replaceState(null, '', location.pathname)
+
+    section.value = 'editor'
+    setTimeout(() => {
+      tableRef.value?.jumpToKey(deepKey)
+      if (deepEdit) {
+        const currentValue = localeData.value[deepEdit]?.[deepKey] ?? ''
+        tableRef.value?.startEdit(deepKey, deepEdit, currentValue)
+      }
+    }, 50)
+  }
 })
 </script>
 
@@ -951,6 +977,18 @@ onMounted(async () => {
           </p>
         </template>
 
+        <template v-if="memoryEnabled">
+          <label class="settings-field-label">Translation memory</label>
+          <div class="settings-memory-row">
+            <a class="settings-memory-btn" :href="exportMemoryUrl()" download="i18n-kit.memory.json">
+              <Icon name="copy" :size="11" />Export
+            </a>
+            <button class="settings-memory-btn settings-memory-btn--danger" @click="clearMemory().then(() => toast('Translation memory cleared', 'success'))">
+              <Icon name="trash" :size="11" />Clear
+            </button>
+          </div>
+        </template>
+
         <p class="settings-hint">
           Reference locale is used for placeholder, HTML tag, and length validation.
           Settings are saved to localStorage.
@@ -1002,6 +1040,8 @@ onMounted(async () => {
       :locked-keys="lockedKeys"
       :stale-keys="staleKeys"
       :rules="configRules"
+      :memory-enabled="memoryEnabled"
+      :namespaces-mode="namespacesMode"
       @save="(c, k, v) => applyTranslation(c, k, v)"
       @delete-key="handleDeleteKey"
       @delete-keys="handleBatchDeleteKeys"
@@ -1464,6 +1504,10 @@ onMounted(async () => {
 .settings-engine-btn { flex: 1; padding: 5px 8px; background: #27272a; border: 1px solid #3f3f46; border-radius: 6px; color: #71717a; font-size: 12px; cursor: pointer; transition: all 0.12s; }
 .settings-engine-btn:hover { border-color: #52525b; color: #d4d4d8; }
 .settings-engine-btn.active { background: rgba(129,140,248,0.12); border-color: rgba(129,140,248,0.35); color: #c7d2fe; }
+.settings-memory-row { display: flex; gap: 6px; }
+.settings-memory-btn { display: flex; align-items: center; gap: 5px; padding: 5px 10px; background: #27272a; border: 1px solid #3f3f46; border-radius: 6px; color: #a1a1aa; font-size: 12px; cursor: pointer; text-decoration: none; transition: all 0.12s; }
+.settings-memory-btn:hover { border-color: #52525b; color: #d4d4d8; }
+.settings-memory-btn--danger:hover { border-color: rgba(239,68,68,0.4); color: #f87171; }
 .settings-locale-list { display: flex; flex-direction: column; gap: 2px; }
 .settings-locale-btn {
   display: flex; align-items: center; gap: 8px;

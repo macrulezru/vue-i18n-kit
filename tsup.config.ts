@@ -20,6 +20,10 @@ export default defineConfig([
     sourcemap: false,
     platform: 'node',
     external: ['vite'],
+    // shims: true provides __dirname / __filename / import.meta.url in both
+    // ESM and CJS outputs — needed so vueI18nDevPlugin can locate the
+    // pre-compiled dev-overlay bundle at dist/vite-plugin/dev-overlay/index.js
+    shims: true,
   },
 
   // ── CLI (Node.js executable, CJS only) ─────────────────────────────────────

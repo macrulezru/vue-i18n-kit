@@ -17,6 +17,7 @@ export function isLocaleDefinition(entry: LocaleEntry): entry is LocaleDefinitio
   if (typeof entry !== 'object' || entry === null || Array.isArray(entry)) return false
   const obj = entry as Record<string, unknown>
   if ('meta' in obj) return true
+  if ('namespaces' in obj) return true
   if ('messages' in obj && typeof obj['messages'] === 'function') return true
   return false
 }
@@ -35,5 +36,22 @@ export function extractMessages(entry: LocaleEntry): LocaleMessages | LocaleLoad
  */
 export function extractMeta(entry: LocaleEntry): Record<string, unknown> | undefined {
   if (isLocaleDefinition(entry)) return entry.meta
+  return undefined
+}
+
+/**
+ * Extracts the namespaces map from a LocaleDefinition, or undefined if none.
+ */
+export function extractNamespaces(entry: LocaleEntry): Record<string, LocaleLoader> | undefined {
+  if (isLocaleDefinition(entry)) return entry.namespaces
+  return undefined
+}
+
+/**
+ * Extracts the eagerNamespaces list from a LocaleDefinition.
+ * Returns `undefined` meaning "load all" if not specified.
+ */
+export function extractEagerNamespaces(entry: LocaleEntry): string[] | undefined {
+  if (isLocaleDefinition(entry)) return entry.eagerNamespaces
   return undefined
 }

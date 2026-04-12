@@ -17,6 +17,7 @@ A reusable Vue 3 localization plugin that wraps [`vue-i18n`](https://vue-i18n.in
 - **TypeScript-first** — all public APIs are fully typed, no `any` leaks into consumer code
 - **Vite check plugin** — checks all locale files for missing or extra keys at build time (import from `vue-i18n-kit/vite`)
 - **Vite inline plugin** — `vueI18nInlinePlugin` bakes all locale JSON into the bundle as a static virtual module — zero HTTP requests at runtime
+- **Vite namespace plugin** — `vueI18nNamespacePlugin` scans split locale directories and generates a virtual module with per-namespace dynamic imports; lazy-load namespaces on demand with `useNamespace()`
 - **CLI** — `vue-i18n-kit init / add / check / merge / prune` scaffolds, audits, and cleans locale files from the terminal
 - **Dictionary merge** — `vue-i18n-kit merge` deep-merges a shared/corporate base dictionary into project locale files
 - **Dead key pruning** — `vue-i18n-kit prune` removes keys not referenced anywhere in the source code
@@ -906,6 +907,321 @@ declare module 'virtual:vue-i18n-kit/locales' {
 
 ---
 
+## Vite Plugin — Namespace Code Splitting
+
+`vueI18nNamespacePlugin` scans a directory of split locale files and generates the virtual module `virtual:vue-i18n-namespaces`. The module exports a `locales` object ready to pass to `createVueI18nPlugin` — each locale entry includes per-namespace dynamic `import()` calls so Vite code-splits them automatically.
+
+Combine with [`vue-i18n-kit split`](#split--split-a-monolithic-locale-into-namespaces) to migrate from a flat JSON file to namespace-per-file structure.
+
+### Setup
+
+```ts
+// vite.config.ts
+import { defineConfig } from 'vite'
+import vue from '@vitejs/plugin-vue'
+import { vueI18nNamespacePlugin } from 'vue-i18n-kit/vite'
+
+export default defineConfig({
+  plugins: [
+    vue(),
+    vueI18nNamespacePlugin({
+      dir: 'src/locales/split',           // scans split/en/, split/ru/, …
+      locales: {
+        en: { meta: { display: 'English', flag: '🇬🇧' }, eagerNamespaces: ['common'] },
+        ru: { meta: { display: 'Русский',  flag: '🇷🇺' }, eagerNamespaces: ['common'] },
+      },
+    }),
+  ],
+})
+```
+
+### Usage in your app
+
+```ts
+// main.ts
+import { createApp } from 'vue'
+import { createVueI18nPlugin } from 'vue-i18n-kit'
+import { locales } from 'virtual:vue-i18n-namespaces'
+
+const app = createApp(App)
+app.use(createVueI18nPlugin({ defaultLocale: 'en', locales }))
+app.mount('#app')
+```
+
+The `locales` object has the following shape at runtime:
+
+```ts
+{
+  en: {
+    namespaces: {
+      common:    () => import('src/locales/split/en/common.json'),
+      dashboard: () => import('src/locales/split/en/dashboard.json'),
+      auth:      () => import('src/locales/split/en/auth.json'),
+    },
+    meta: { display: 'English', flag: '🇬🇧' },
+    eagerNamespaces: ['common'],  // loaded immediately on locale switch
+  },
+  ru: { … },
+}
+```
+
+Namespaces not in `eagerNamespaces` are loaded lazily with `useNamespace()`:
+
+```ts
+// DashboardLayout.vue
+import { useNamespace } from 'vue-i18n-kit'
+
+const { isLoading, isLoaded } = useNamespace('dashboard')
+// or load several at once:
+const { isLoading } = useNamespace(['dashboard', 'charts'])
+```
+
+`useNamespace` re-loads the requested namespaces whenever the active locale changes, and is SSR-safe.
+
+### TypeScript — virtual module type declaration
+
+Add to `env.d.ts` or `vite-env.d.ts`:
+
+```ts
+declare module 'virtual:vue-i18n-namespaces' {
+  import type { LocaleEntry } from 'vue-i18n-kit'
+  export const locales: Record<string, LocaleEntry>
+}
+```
+
+### Options
+
+| Option | Type | Default | Description |
+|---|---|---|---|
+| `dir` | `string` | `'src/locales/split'` | Directory containing locale subdirectories (`<dir>/<locale>/<namespace>.json`). |
+| `locales` | `Record<string, { meta?, eagerNamespaces? }>` | `{}` | Per-locale config. Locales found in the directory but not listed here are included automatically. |
+
+| `locales[code].meta` | `Record<string, unknown>` | — | Arbitrary metadata forwarded to `LocaleDefinition.meta`. |
+| `locales[code].eagerNamespaces` | `string[]` | `undefined` | Namespaces to load immediately when the locale is activated. Omit to load all eagerly. Pass `[]` for fully lazy loading. |
+
+### HMR
+
+When any namespace JSON file inside `dir` changes, Vite invalidates and reloads the virtual module automatically — no manual restart needed.
+
+---
+
+## Vite Plugin — In-Context Translation Editor (dev only)
+
+`vueI18nDevPlugin` injects a floating editor overlay into your running application during development. Translated strings can be wrapped with the `<I18nInspect>` component to show a pencil icon on hover; clicking it opens an inline popup for editing that key — changes are saved immediately via the `vue-i18n-kit ui` server and picked up by Vite HMR.
+
+**The plugin is a complete no-op during production builds.** Nothing is added to your bundle.
+
+### Setup
+
+```ts
+// vite.config.ts
+import { defineConfig } from 'vite'
+import vue from '@vitejs/plugin-vue'
+import { vueI18nDevPlugin } from 'vue-i18n-kit/vite'
+
+export default defineConfig({
+  plugins: [
+    vue(),
+    vueI18nDevPlugin(),  // uiUrl is set automatically by vue-i18n-kit dev
+  ],
+})
+```
+
+Start both servers with one command:
+
+```bash
+npx vue-i18n-kit dev
+```
+
+This auto-detects `scripts.dev` from `package.json`, starts both Vite and the locale editor UI in parallel, and passes `I18N_KIT_UI_URL` to `vueI18nDevPlugin` automatically — no manual `uiUrl` needed.
+
+```bash
+# Custom port or framework:
+vue-i18n-kit dev --ui-port 5173
+vue-i18n-kit dev --app-cmd "nuxt dev"
+
+# Or keep the manual approach if you prefer:
+# package.json
+"i18n:dev": "concurrently \"vite\" \"vue-i18n-kit ui\""
+```
+
+### Register `I18nInspect` globally
+
+`vueI18nDevPlugin` exposes the component on `window.__I18N_KIT_INSPECT_COMPONENT__`. Register it in your app entry so it's available in every template:
+
+```ts
+// main.ts
+const app = createApp(App)
+
+if (import.meta.env.DEV && window.__I18N_KIT_INSPECT_COMPONENT__) {
+  app.component('I18nInspect', window.__I18N_KIT_INSPECT_COMPONENT__)
+}
+
+app.use(/* your i18n plugin */)
+app.mount('#app')
+```
+
+### Auto-wrap — zero-markup mode (default)
+
+By default `vueI18nDevPlugin` automatically rewrites Vue SFC templates at dev time. Every `{{ t('key') }}`, `{{ tm('key') }}`, and `{{ $t('key') }}` interpolation is wrapped with `<I18nInspect>` — **no manual markup needed**.
+
+```vue
+<!-- Source as written -->
+<template>
+  <p>{{ t('nav.home') }}</p>
+  <h1>{{ tm('hero.title') }}</h1>
+</template>
+
+<!-- What Vite actually compiles in dev mode -->
+<template>
+  <p><I18nInspect i18n-key="nav.home">{{ t('nav.home') }}</I18nInspect></p>
+  <h1><I18nInspect i18n-key="hero.title">{{ tm('hero.title') }}</I18nInspect></h1>
+</template>
+```
+
+**Auto-wrap rules:**
+- Only `{{ }}` interpolations — element attributes (`:placeholder="t('key')"`) are never touched.
+- Only **literal string keys** — dynamic expressions like `{{ t(dynamicKey) }}` are skipped.
+- Template literals containing `${}` are skipped (treated as dynamic).
+- Already-wrapped calls are not double-wrapped — files with explicit `<I18nInspect>` markup are safe.
+
+**Opt out** by setting `autoWrap: false`:
+```ts
+vueI18nDevPlugin({ autoWrap: false })
+```
+Then register `I18nInspect` manually (see below) and wrap strings explicitly.
+
+**Custom function names:**
+```ts
+vueI18nDevPlugin({
+  wrapFunctions: ['t', '$t', 'tm', 'i18n.global.t'],
+})
+```
+
+### Marking strings for in-context editing (explicit mode)
+
+When `autoWrap: false`, wrap translated strings manually with `<I18nInspect i18n-key="…">`:
+
+```vue
+<template>
+  <!-- Single key -->
+  <I18nInspect i18n-key="nav.home">{{ t('nav.home') }}</I18nInspect>
+
+  <!-- With explicit locale (e.g. always edit the Russian translation) -->
+  <I18nInspect i18n-key="nav.home" locale="ru">{{ t('nav.home') }}</I18nInspect>
+
+  <!-- Works inside any element -->
+  <h1>
+    <I18nInspect i18n-key="hero.title">{{ t('hero.title') }}</I18nInspect>
+  </h1>
+</template>
+```
+
+**Visual behaviour — `I18nInspect`:**
+
+- On hover a dashed purple outline appears around the wrapped text.
+- A small purple pencil button (✏) fades in at the top-right corner of the element.
+- Clicking the button opens the `DevOverlay` editor popup.
+- All styles use the `__ik-` CSS prefix — they cannot conflict with host-app styles.
+
+### Dynamic keys — `v-i18n-inspect` directive
+
+`autoWrap` and `<I18nInspect>` only work with **literal string keys** — the key must be known at build time.  
+For **runtime keys** (variables, computed values, loop indices) use the `v-i18n-inspect` directive instead:
+
+```vue
+<template>
+  <!-- Variable key -->
+  <span v-i18n-inspect="activeKey">{{ t(activeKey) }}</span>
+
+  <!-- Computed / concatenated key -->
+  <span v-i18n-inspect="`items.${item.id}`">{{ t(`items.${item.id}`) }}</span>
+
+  <!-- v-for with dynamic keys -->
+  <li
+    v-for="section in sections"
+    :key="section.id"
+    v-i18n-inspect="'sections.' + section.id"
+  >
+    {{ t('sections.' + section.id) }}
+  </li>
+</template>
+```
+
+**Why a directive instead of a component?**  
+The directive attaches hover behaviour to the **existing** element without adding a wrapper node.  
+This preserves CSS selectors that rely on `:first-child`, `:last-child`, flex/grid direct-child rules, etc.
+
+**Visual behaviour** is identical to `I18nInspect`:
+
+- Hover → dashed purple outline + pencil button.
+- Click → opens the `DevOverlay` editor popup with the current value of `v-i18n-inspect`.
+- Key updates reactively: if the binding value changes, the directive tracks the new key automatically.
+
+**Register the directive** in `main.ts` alongside `I18nInspect`:
+
+```ts
+// main.ts
+async function initializeApp() {
+  const app = createApp(App)
+
+  // ... app.use(...)
+
+  if (import.meta.env.DEV && window.__I18N_KIT_INSPECT_COMPONENT__) {
+    app.component('I18nInspect', window.__I18N_KIT_INSPECT_COMPONENT__)
+  }
+  if (import.meta.env.DEV && window.__I18N_KIT_INSPECT_DIRECTIVE__) {
+    app.directive('i18n-inspect', window.__I18N_KIT_INSPECT_DIRECTIVE__)
+  }
+
+  app.mount('#app')
+}
+```
+
+> **Production safety** — the directive is never registered in production builds.  
+> Vue silently ignores unknown directives, so leaving `v-i18n-inspect` attributes in templates causes no warnings and adds nothing to the bundle.
+
+### Editor popup (`DevOverlay`)
+
+When the pencil is clicked, a centered modal appears:
+
+1. Loads current values for **all** registered locales from the `vue-i18n-kit ui` server.
+2. Shows a labelled textarea for each locale, pre-filled with the existing translation.
+3. A dot (`●`) marks locales with unsaved changes.
+4. **Save** (`Ctrl+Enter` / `⌘+Enter`) sends `PUT /api/locale/:code` for each changed locale.
+5. The server writes the updated JSON to disk — Vite's file watcher picks up the change and triggers HMR automatically.
+6. After a brief success flash the popup closes.
+
+The header contains two action buttons:
+
+- **⬛ Open in editor panel** — opens the full `vue-i18n-kit ui` in a right-side iframe panel overlaid on top of your application. The mini popup closes automatically so you can still hover over other translations in the app behind the panel.
+- **✕ / ↗** — inside the iframe bar: **Close** collapses the panel, **↗ Open in new tab** opens the same URL in a new browser tab and closes the panel.
+
+**Keyboard shortcuts:**
+
+| Key | Action |
+|---|---|
+| `Escape` | Close popup (if open), or collapse iframe panel |
+| `Ctrl+Enter` / `⌘+Enter` | Save all changed locales |
+
+### `I18nInspect` props
+
+| Prop | Type | Required | Description |
+|---|---|---|---|
+| `i18n-key` | `string` | ✓ | The translation key passed to `t()`. Shown in the editor and used as the lookup key when saving. |
+| `locale` | `string` | — | Override the locale to edit. Defaults to the currently active locale. |
+
+### Options
+
+| Option | Type | Default | Description |
+|---|---|---|---|
+| `uiUrl` | `string` | `I18N_KIT_UI_URL` env or `'http://localhost:4173'` | URL of the running `vue-i18n-kit ui` server. Set automatically when using `vue-i18n-kit dev`. |
+| `autoWrap` | `boolean` | `true` | Automatically wrap `t()` / `tm()` / `$t()` interpolations with `<I18nInspect>` at dev time. Set to `false` to use explicit markup only. |
+| `wrapFunctions` | `string[]` | `['t', 'tm', '$t']` | Function names to look for when `autoWrap` is enabled. |
+| `iframeWidth` | `string` | `'480px'` | Width of the right-side iframe editor panel. Accepts any CSS width value (`'600px'`, `'40vw'`, etc.). |
+
+---
+
 ## CLI — Locale File Management
 
 The `vue-i18n-kit` CLI helps scaffold and audit locale JSON files.
@@ -942,6 +1258,25 @@ vue-i18n-kit init
 - Modify `main.ts` (or any other app entry file). The plugin registration (`app.use(createVueI18nPlugin({...}))`) must be added manually — see [Register the plugin](#2-register-the-plugin) above.
 
 Running `vue-i18n-kit init` on an existing project offers three choices: use the current config as-is, update settings (wizard pre-filled with current values), or reinitialize from scratch.
+
+#### i18n Ally integration
+
+The wizard offers an optional step to generate `.vscode/settings.json` with [i18n Ally](https://marketplace.visualstudio.com/items?itemName=lokalise.i18n-ally) settings. Selecting yes produces:
+
+```json
+// .vscode/settings.json (merged with any existing content)
+{
+  "i18n-ally.locales": ["en", "ru"],
+  "i18n-ally.pathMatcher": "src/locales/{locale}.json",
+  "i18n-ally.sourceLanguage": "en",
+  "i18n-ally.enabledParsers": ["json"],
+  "i18n-ally.keystyle": "nested"
+}
+```
+
+This enables in-editor inline translation previews, missing-key highlighting, and i18n Ally's translation helper panel — all reading from the same locale files.
+
+---
 
 ### `add` — Add a new locale
 
@@ -1082,6 +1417,53 @@ declare module 'vue-i18n-kit' {
   }
 }
 ```
+
+### `split` — Split flat JSON into namespace files
+
+Splits each `{locale}.json` into per-namespace files: `{locale}/{namespace}.json`. The top-level key in the source JSON becomes the namespace name.
+
+```bash
+vue-i18n-kit split
+vue-i18n-kit split --dir src/locales --out src/locales/split --dry
+```
+
+| Flag | Default | Description |
+|---|---|---|
+| `--dir <path>` | `localesDir` from config | Source locales directory. |
+| `--out <path>` | `<dir>/split` | Output directory. |
+| `--dry` | `false` | Preview without writing files. |
+
+After splitting, each locale produces a subdirectory:
+```
+src/locales/split/
+├── en/
+│   ├── auth.json
+│   ├── dashboard.json
+│   └── buttons.json
+└── ru/
+    ├── auth.json
+    └── ...
+```
+
+---
+
+### `merge-ns` — Merge namespace files back into flat JSON
+
+Reverse operation of `split`: reads all `*.json` files in each locale subdirectory and merges them into a single `{locale}.json`.
+
+```bash
+vue-i18n-kit merge-ns
+vue-i18n-kit merge-ns --dir src/locales/split --out src/locales --dry
+```
+
+| Flag | Default | Description |
+|---|---|---|
+| `--dir <path>` | `<localesDir>/split` | Namespace directory. |
+| `--out <path>` | `localesDir` from config | Output directory for merged files. |
+| `--dry` | `false` | Preview without writing files. |
+| `--no-sort` | `false` | Skip alphabetical key sort. |
+
+---
 
 ### `stale` — Show outdated translations
 
@@ -1420,6 +1802,8 @@ A browser-based editor for viewing and editing locale files directly in your pro
 - **Batch select & delete** — row checkboxes + bulk delete bar
 - **Usage map** — expand any key row to see which source files reference it; clickable file chips open the file in your IDE (VS Code, Cursor, WebStorm, PhpStorm, IntelliJ)
 - **Cell validation** — inline warnings for: placeholder mismatch `{var}`, HTML tag mismatch, ICU syntax errors (unbalanced braces, missing `other {}`), length > 2.5× reference
+- **Translation memory** — when editing a non-reference locale cell, previously saved translations for similar source strings are shown as one-click suggestion chips. The memory is saved to `i18n-kit.memory.json` and can be cleared or exported from Settings. Disable with `memory: { enabled: false }` in config.
+- **Namespace filter bar** — when `namespaces: true` is set in `i18n-kit.config.json`, a pill bar above the table lets you filter to a single namespace with one click.
 - **Empty vs missing** — visual distinction between a key that is absent (`— missing —`) and one intentionally set to an empty string (`— empty —`)
 - **Duplicate badge** — `dup` badge on keys where all locales have identical non-empty values
 - **Copy from reference** — one-click button on missing/empty cells to copy the value from the reference locale
@@ -1537,6 +1921,32 @@ export default defineNuxtConfig({
 ```
 
 On subsequent runs `auto-config` replaces the entire `vueI18nMapPlugin(...)` call with fresh data from `createVueI18nPlugin` — `meta` included. Any other config changes are preserved.
+
+### `vue-i18n-kit dev`
+
+Starts the application's dev server **and** the locale editor UI simultaneously. The app dev command is auto-detected from `package.json → scripts.dev`.
+
+```bash
+vue-i18n-kit dev [options]
+```
+
+| Flag | Default | Description |
+|---|---|---|
+| `--ui-port <number>` | `4173` | Port for the locale editor UI server. |
+| `--app-cmd <command>` | auto-detected | Override the app dev command, e.g. `"nuxt dev"`. |
+
+**Auto-detection:** the package manager is inferred from lockfiles (`pnpm-lock.yaml` → `pnpm`, `yarn.lock` → `yarn`, otherwise `npm`). The resolved command is `<pm> run dev`.
+
+**Environment variable:** `vue-i18n-kit dev` sets `I18N_KIT_UI_URL=http://localhost:<ui-port>` in the app's environment. `vueI18nDevPlugin` reads this variable automatically so you can omit `uiUrl` from `vite.config.ts`:
+
+```ts
+// No uiUrl needed — vue-i18n-kit dev passes I18N_KIT_UI_URL automatically
+vueI18nDevPlugin()
+```
+
+Both processes are shut down together when you press `Ctrl+C`.
+
+---
 
 ### `vue-i18n-kit ui`
 

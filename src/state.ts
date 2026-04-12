@@ -10,6 +10,8 @@ export interface I18nKitState {
   options: I18nPluginOptions
   isLoading: Ref<boolean>
   loadedLocales: Set<string>
+  /** locale code → Set of loaded namespace names */
+  loadedNamespaces: Map<string, Set<string>>
   storageKey: string
   /** Subscribers notified after every successful locale switch */
   localeChangeCallbacks: Set<(lang: string) => void>

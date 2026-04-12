@@ -112,6 +112,25 @@ export interface I18nKitConfig {
       apiUrl?: string
     }
   }
+  /**
+   * Enable namespace mode: treat top-level JSON keys as namespaces.
+   * - CLI: `vue-i18n-kit split` / `vue-i18n-kit merge-ns`
+   * - Editor: shows a namespace filter bar above the key table.
+   * @default false
+   */
+  namespaces?: boolean
+  /**
+   * Translation memory settings.
+   * Stores past translations in i18n-kit.memory.json and suggests them
+   * when editing cells in the UI.
+   */
+  memory?: {
+    /**
+     * Set to false to disable translation memory entirely.
+     * @default true
+     */
+    enabled?: boolean
+  }
   scanner?: {
     /** Glob patterns for scanning t()/tm()/$t() key usage */
     include: string[]
