@@ -22,8 +22,32 @@ export type LocaleLoader = () => Promise<LocaleMessages | { default: LocaleMessa
  * }
  */
 export interface LocaleDefinition<TMeta extends Record<string, unknown> = Record<string, unknown>> {
-  /** Pre-loaded message object or async loader function */
-  messages: LocaleMessages | LocaleLoader
+  /**
+   * Pre-loaded message object or async loader function.
+   * Optional when `namespaces` is provided.
+   */
+  messages?: LocaleMessages | LocaleLoader
+  /**
+   * Per-namespace lazy loaders. Each namespace is loaded independently.
+   *
+   * @example
+   * namespaces: {
+   *   auth:      () => import('./locales/split/en/auth.json'),
+   *   dashboard: () => import('./locales/split/en/dashboard.json'),
+   * }
+   */
+  namespaces?: Record<string, LocaleLoader>
+  /**
+   * Which namespaces to load immediately when this locale is activated via
+   * `setLocale()`. All others remain unloaded until `useNamespace()` or
+   * `service.loadNamespace()` is called.
+   *
+   * - `undefined` (default) — all namespaces load eagerly on `setLocale`
+   *   (same observable behaviour as a monolithic locale file)
+   * - `string[]` — only the listed namespaces load eagerly; the rest are lazy
+   * - `[]` — fully lazy; nothing loads until explicitly requested
+   */
+  eagerNamespaces?: string[]
   /** Arbitrary metadata attached to this locale */
   meta?: TMeta
 }
@@ -75,6 +99,20 @@ export interface I18nService<TMeta extends Record<string, unknown> = Record<stri
    * })
    */
   onLocaleChange(callback: (lang: string) => void): () => void
+  /**
+   * Lazily load a specific namespace for the given (or currently active) locale.
+   * No-op if the namespace is already loaded or not defined.
+   *
+   * @example
+   * // In a router guard before entering a protected route:
+   * await i18nPlugin.service.loadNamespace('auth')
+   */
+  loadNamespace(ns: string, locale?: string): Promise<void>
+  /**
+   * Returns true if the given namespace has already been loaded for the
+   * specified (or currently active) locale.
+   */
+  isNamespaceLoaded(ns: string, locale?: string): boolean
 }
 
 /**

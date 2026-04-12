@@ -9,6 +9,9 @@ import { runStale } from './commands/stale.js'
 import { runExport } from './commands/export-translations.js'
 import { runImport } from './commands/import-translations.js'
 import { runStats } from './commands/stats.js'
+import { runSplit } from './commands/split.js'
+import { runMergeNs } from './commands/merge-ns.js'
+import { runDev } from './commands/dev.js'
 import { startUiServer } from '../ui-server/server.js'
 
 const VERSION = '0.3.0'
@@ -155,6 +158,29 @@ switch (command) {
     break
   }
 
+  case 'split': {
+    const flags = parseFlags(rest)
+    runSplit({
+      dir:  typeof flags['dir'] === 'string' ? flags['dir'] : undefined,
+      out:  typeof flags['out'] === 'string' ? flags['out'] : undefined,
+      dry:  flags['dry'] === true,
+      cwd:  process.cwd(),
+    })
+    break
+  }
+
+  case 'merge-ns': {
+    const flags = parseFlags(rest)
+    runMergeNs({
+      dir:    typeof flags['dir']    === 'string' ? flags['dir']    : undefined,
+      out:    typeof flags['out']    === 'string' ? flags['out']    : undefined,
+      dry:    flags['dry'] === true,
+      noSort: flags['no-sort'] === true,
+      cwd:    process.cwd(),
+    })
+    break
+  }
+
   case 'stale': {
     const flags = parseFlags(rest)
     runStale({
@@ -166,6 +192,17 @@ switch (command) {
 
   case 'auto-config': {
     runAutoConfig(process.cwd())
+    break
+  }
+
+  case 'dev': {
+    const flags = parseFlags(rest)
+    const uiPortRaw = flags['ui-port']
+    runDev({
+      uiPort:  typeof uiPortRaw === 'string' ? parseInt(uiPortRaw, 10) : 4173,
+      appCmd:  typeof flags['app-cmd'] === 'string' ? flags['app-cmd'] : undefined,
+      cwd:     process.cwd(),
+    })
     break
   }
 
@@ -189,6 +226,10 @@ Commands:
   init                          Interactive setup wizard — creates i18n-kit.config.json,
                                   locale JSON files, and configures vite/nuxt automatically.
                                   Re-run at any time to update settings.
+
+  dev [options]                 Start the app dev server AND the locale editor UI together
+    --ui-port <number>          Port for the i18n UI server (default: 4173)
+    --app-cmd <command>         Override auto-detected dev command (default: npm/pnpm/yarn run dev)
 
   ui [options]                  Start the locale editor UI
     --port <number>             Port to listen on       (default: 4173)
@@ -233,6 +274,17 @@ Commands:
     --out <path>                Write to file instead of stdout (json/html)
     --dir <path>                Locales directory       (default: src/locales)
 
+  split [options]               Split flat locale JSON files into per-namespace files
+    --dir <path>                Source locales directory    (default: localesDir from config)
+    --out <path>                Output directory            (default: <dir>/split)
+    --dry                       Preview without writing files
+
+  merge-ns [options]            Merge per-namespace files back into flat locale JSON files
+    --dir <path>                Namespace directory         (default: <localesDir>/split)
+    --out <path>                Output directory            (default: localesDir from config)
+    --dry                       Preview without writing files
+    --no-sort                   Skip alphabetical key sort
+
   stale [options]               Show keys whose reference value changed since last translation
     --dir <path>                Locales directory       (default: src/locales)
     --locale <code>             Reference locale        (default: first in config)
@@ -249,7 +301,10 @@ Commands:
 
 Examples:
   npx vue-i18n-kit init                           # first-time setup or update config
-  npx vue-i18n-kit ui                             # open locale editor
+  npx vue-i18n-kit dev                            # start app + locale editor together
+  npx vue-i18n-kit dev --ui-port 5173             # custom UI server port
+  npx vue-i18n-kit dev --app-cmd "nuxt dev"       # Nuxt projects
+  npx vue-i18n-kit ui                             # open locale editor standalone
   npx vue-i18n-kit add fr --from en --empty
   npx vue-i18n-kit check --default en --fail
   npx vue-i18n-kit merge shared/base.json --dry   # preview base dictionary merge

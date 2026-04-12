@@ -1,4 +1,4 @@
-import { readFileSync, readdirSync, existsSync, mkdirSync, writeFileSync } from 'node:fs'
+import { readFileSync, readdirSync, existsSync, mkdirSync, writeFileSync, statSync } from 'node:fs'
 import { resolve, join, dirname } from 'node:path'
 import { compareLocales } from '../utils/localeKeys'
 import { buildEntriesMap } from '../utils/scanner'
@@ -20,6 +20,23 @@ export interface VitePlugin {
   handleHotUpdate?(ctx: unknown): void
   resolveId?(id: string, importer?: string): string | null | undefined
   load?(id: string): string | null | undefined
+  transform?(code: string, id: string): string | null | undefined
+  /**
+   * Plain function form runs as post-hook (after Vite's own HTML transform),
+   * so bare-specifier imports in injected scripts are NOT rewritten.
+   * Use the object form with `order: 'pre'` to run before Vite's transform.
+   */
+  transformIndexHtml?:
+    | ((html: string, ctx?: unknown) => HtmlTagDescriptor[] | void)
+    | { order?: 'pre' | 'post'; handler: (html: string, ctx?: unknown) => HtmlTagDescriptor[] | void }
+}
+
+/** Minimal Vite HtmlTagDescriptor — enough to inject script/link tags. */
+export interface HtmlTagDescriptor {
+  tag: string
+  attrs?: Record<string, string | boolean | undefined>
+  children?: string | HtmlTagDescriptor[]
+  injectTo?: 'head' | 'body' | 'head-prepend' | 'body-prepend'
 }
 
 export interface I18nKitRules {
@@ -409,4 +426,449 @@ export function vueI18nInlinePlugin(options: I18nInlinePluginOptions): VitePlugi
       return `export default ${JSON.stringify(result, null, 2)}`
     },
   }
+}
+
+// ── Namespace plugin ──────────────────────────────────────────────────────────
+
+const NS_VIRTUAL_ID   = 'virtual:vue-i18n-namespaces'
+const NS_RESOLVED_ID  = '\0' + NS_VIRTUAL_ID
+
+export interface I18nNamespaceLocaleConfig {
+  /** Arbitrary metadata forwarded to LocaleDefinition.meta */
+  meta?: Record<string, unknown>
+  /**
+   * Namespaces to load immediately when this locale is activated.
+   * Omit to load all namespaces eagerly.
+   * Pass `[]` for fully lazy loading (use `useNamespace()` to load on demand).
+   */
+  eagerNamespaces?: string[]
+}
+
+export interface I18nNamespacePluginOptions {
+  /**
+   * Directory containing locale subdirectories with namespace JSON files.
+   * Each subdirectory name is a locale code; each JSON file inside is a namespace.
+   *
+   * @example 'src/locales/split'  →  split/en/auth.json, split/en/dashboard.json
+   * @default 'src/locales/split'
+   */
+  dir?: string
+  /**
+   * Optional per-locale config (metadata, eagerNamespaces).
+   * Locales found in the directory but not listed here are included automatically.
+   */
+  locales?: Record<string, I18nNamespaceLocaleConfig>
+}
+
+/**
+ * Vite plugin that scans a namespace directory and generates the virtual module
+ * `virtual:vue-i18n-namespaces` with per-locale namespace loaders.
+ *
+ * **Setup (vite.config.ts):**
+ * ```ts
+ * import { vueI18nNamespacePlugin } from 'vue-i18n-kit/vite'
+ *
+ * export default defineConfig({
+ *   plugins: [
+ *     vueI18nNamespacePlugin({
+ *       dir: 'src/locales/split',
+ *       locales: {
+ *         en: { meta: { display: 'English', flag: '🇬🇧' }, eagerNamespaces: ['common'] },
+ *         ru: { meta: { display: 'Русский',  flag: '🇷🇺' } },
+ *       },
+ *     }),
+ *   ],
+ * })
+ * ```
+ *
+ * **main.ts:**
+ * ```ts
+ * import { locales } from 'virtual:vue-i18n-namespaces'
+ *
+ * app.use(createVueI18nPlugin({ defaultLocale: 'en', locales }))
+ * ```
+ *
+ * **Lazy load a namespace in a component:**
+ * ```ts
+ * import { useNamespace } from 'vue-i18n-kit'
+ * const { isLoading } = useNamespace('dashboard')
+ * ```
+ *
+ * TypeScript: add to `env.d.ts` or `vite-env.d.ts`:
+ * ```ts
+ * declare module 'virtual:vue-i18n-namespaces' {
+ *   import type { LocaleEntry } from 'vue-i18n-kit'
+ *   export const locales: Record<string, LocaleEntry>
+ * }
+ * ```
+ */
+export function vueI18nNamespacePlugin(options: I18nNamespacePluginOptions = {}): VitePlugin {
+  const { dir = 'src/locales/split', locales: localeCfg = {} } = options
+  let root = ''
+
+  return {
+    name: 'vue-i18n-kit:namespaces',
+    enforce: 'pre',
+
+    configResolved(config: unknown) {
+      root = (config as ResolvedConfig).root
+    },
+
+    resolveId(id: string) {
+      if (id === NS_VIRTUAL_ID) return NS_RESOLVED_ID
+    },
+
+    load(id: string) {
+      if (id !== NS_RESOLVED_ID) return
+
+      const absDir = resolve(root, dir)
+      if (!existsSync(absDir)) {
+        console.warn(`[vue-i18n-kit:namespaces] Directory not found: ${absDir}`)
+        return `export const locales = {}`
+      }
+
+      // Collect locale subdirectories
+      const localeDirs = readdirSync(absDir).filter(entry => {
+        try { return statSync(join(absDir, entry)).isDirectory() } catch { return false }
+      })
+
+      const localeEntries: string[] = []
+
+      for (const code of localeDirs.sort()) {
+        const localeDir = join(absDir, code)
+        const nsFiles = readdirSync(localeDir).filter(f => f.endsWith('.json')).sort()
+        if (nsFiles.length === 0) continue
+
+        const cfg = localeCfg[code] ?? {}
+        const nsEntries: string[] = []
+
+        for (const nsFile of nsFiles) {
+          const ns = nsFile.replace(/\.json$/, '')
+          const absPath = join(localeDir, nsFile).replace(/\\/g, '/')
+          // Use dynamic import so Vite code-splits each namespace file
+          nsEntries.push(`        ${JSON.stringify(ns)}: () => import(${JSON.stringify(absPath)})`)
+        }
+
+        const metaStr = cfg.meta ? `,\n      meta: ${JSON.stringify(cfg.meta)}` : ''
+        const eagerStr = cfg.eagerNamespaces !== undefined
+          ? `,\n      eagerNamespaces: ${JSON.stringify(cfg.eagerNamespaces)}`
+          : ''
+
+        localeEntries.push(
+          `  ${JSON.stringify(code)}: {\n    namespaces: {\n${nsEntries.join(',\n')}\n      }${metaStr}${eagerStr}\n  }`
+        )
+      }
+
+      return [
+        `export const locales = {`,
+        localeEntries.join(',\n'),
+        `}`,
+      ].join('\n')
+    },
+
+    // HMR: reload module when any namespace file changes
+    handleHotUpdate(ctx: unknown) {
+      const { file, server } = ctx as { file: string; modules: unknown[]; server: { moduleGraph: { getModuleById(id: string): unknown }; reloadModule(mod: unknown): void } }
+      const absDir = resolve(root, dir)
+      if (file.startsWith(absDir) && file.endsWith('.json')) {
+        const mod = server.moduleGraph.getModuleById(NS_RESOLVED_ID)
+        if (mod) server.reloadModule(mod)
+      }
+    },
+  }
+}
+
+// ── Dev overlay plugin ────────────────────────────────────────────────────────
+
+const DEV_VIRTUAL_ID   = 'virtual:vue-i18n-kit/dev-overlay'
+const DEV_RESOLVED_ID  = '\0' + DEV_VIRTUAL_ID
+
+export interface I18nDevPluginOptions {
+  /**
+   * URL of the running `vue-i18n-kit ui` server.
+   *
+   * When the app is started via `vue-i18n-kit dev`, this is set automatically
+   * through the `I18N_KIT_UI_URL` environment variable — you can omit this
+   * option entirely in that case.
+   *
+   * @default process.env.I18N_KIT_UI_URL ?? 'http://localhost:4173'
+   */
+  uiUrl?: string
+
+  /**
+   * Automatically wrap `t()` / `tm()` / `$t()` calls found in Vue template
+   * interpolations (`{{ }}`) with `<I18nInspect i18n-key="…">` in dev mode.
+   *
+   * Only literal string keys are wrapped; dynamic keys are skipped.
+   * Set to `false` to opt out and use `<I18nInspect>` explicitly.
+   * @default true
+   */
+  autoWrap?: boolean
+
+  /**
+   * List of function names to look for in template interpolations.
+   * @default ['t', 'tm', '$t']
+   */
+  wrapFunctions?: string[]
+
+  /**
+   * Width of the iframe editor panel opened via «Open in editor panel».
+   * Accepts any valid CSS width value.
+   * @default '480px'
+   */
+  iframeWidth?: string
+}
+
+/**
+ * Vite plugin that enables in-context translation editing.
+ *
+ * **Active only in `vite serve` (development) mode** — complete no-op during
+ * production builds. Nothing from this plugin ends up in the final bundle.
+ *
+ * When active the plugin:
+ * 1. Injects a virtual module into the page that mounts the `DevOverlay`
+ *    as a standalone Vue app on `document.body`.
+ * 2. Exposes `window.__I18N_KIT_INSPECT_COMPONENT__` so the `I18nInspect`
+ *    component can be registered in the user app (done automatically by the
+ *    transform sub-plugin added in a later iteration).
+ * 3. Sets `window.__I18N_KIT_UI_URL__` for the overlay to communicate with
+ *    the `vue-i18n-kit ui` server.
+ *
+ * @example
+ * // vite.config.ts
+ * import { vueI18nDevPlugin } from 'vue-i18n-kit/vite'
+ *
+ * export default defineConfig({
+ *   plugins: [
+ *     vue(),
+ *     vueI18nDevPlugin({ uiUrl: 'http://localhost:4173' }),
+ *   ],
+ * })
+ */
+export function vueI18nDevPlugin(options: I18nDevPluginOptions = {}): VitePlugin {
+  const {
+    uiUrl = process.env['I18N_KIT_UI_URL'] ?? 'http://localhost:4173',
+    autoWrap = true,
+    wrapFunctions = ['t', 'tm', '$t'],
+    iframeWidth = '100vw',
+  } = options
+  let isServe = false
+
+  // __dirname is available here via tsup's `shims: true` option, which injects
+  // a fileURLToPath-based shim in the ESM output so it works identically in
+  // both dist/vite-plugin/index.js (CJS) and dist/vite-plugin/index.mjs (ESM).
+  // At runtime __dirname === dist/vite-plugin/, so joining 'dev-overlay/index.js'
+  // points to the pre-compiled overlay bundle.
+  const overlayIndexPath = join(__dirname, 'dev-overlay', 'index.js')
+
+  return {
+    name: 'vue-i18n-kit:dev',
+    enforce: 'pre',
+
+    configResolved(config: unknown) {
+      const cfg = config as ResolvedConfig
+      isServe = (cfg as unknown as { command: string }).command === 'serve'
+    },
+
+    resolveId(id: string) {
+      if (!isServe) return
+      if (id === DEV_VIRTUAL_ID) return DEV_RESOLVED_ID
+    },
+
+    load(id: string) {
+      if (!isServe) return
+      if (id !== DEV_RESOLVED_ID) return
+      return buildDevOverlayCode(uiUrl, overlayIndexPath, iframeWidth)
+    },
+
+    transform(code: string, id: string) {
+      if (!isServe || !autoWrap) return
+      // Only raw .vue files (no query params — those are compiled sub-blocks)
+      if (!id.endsWith('.vue') || id.includes('?')) return
+      return wrapTranslationCalls(code, wrapFunctions)
+    },
+
+    // Use `src` pointing at the canonical Vite virtual-module URL so the
+    // browser can fetch it directly without any specifier rewriting.
+    // Virtual modules resolved to `\0<id>` are served by Vite at
+    // `/@id/__x00__<id>` — this is stable across Vite v4/v5/v6/v7.
+    transformIndexHtml(_html: string) {
+      if (!isServe) return []
+      return [
+        {
+          tag: 'script',
+          attrs: { type: 'module', src: `/@id/__x00__${DEV_VIRTUAL_ID}` },
+          injectTo: 'head',
+        },
+      ]
+    },
+  }
+}
+
+/**
+ * Rewrites a Vue SFC's `<template>` block in dev mode: wraps every
+ * `{{ t('key') }}` / `{{ tm('key') }}` / `{{ $t('key') }}` interpolation
+ * with `<I18nInspect i18n-key="key">{{ … }}</I18nInspect>`.
+ *
+ * Rules:
+ * - Only interpolations (`{{ }}`), never element attributes.
+ * - Only literal string keys — dynamic expressions are skipped.
+ * - Already-wrapped calls (immediately followed by `</I18nInspect>`) are not
+ *   double-wrapped, so files with explicit `<I18nInspect>` markup are safe.
+ * - Template literals containing `${}` are skipped (dynamic key).
+ *
+ * Returns `undefined` (no change) when the template is unchanged.
+ *
+ * @internal exported for unit-testing
+ */
+export function wrapTranslationCalls(source: string, fnAliases: string[]): string | undefined {
+  // Locate the <template> block (Vue SFC has exactly one)
+  const templateStart = source.indexOf('<template')
+  if (templateStart === -1) return
+
+  const tagEnd = source.indexOf('>', templateStart)
+  if (tagEnd === -1) return
+
+  const templateClose = source.lastIndexOf('</template>')
+  if (templateClose === -1 || templateClose <= tagEnd) return
+
+  const before  = source.slice(0, tagEnd + 1)
+  const content = source.slice(tagEnd + 1, templateClose)
+  const after   = source.slice(templateClose)
+
+  // Sort longest name first so e.g. 'tm' is matched before 't'
+  const sorted = [...fnAliases].sort((a, b) => b.length - a.length)
+  const escapedNames = sorted.map(n => n.replace(/[$]/g, '\\$')).join('|')
+
+  // Match the opening of a translation interpolation: {{ fnName('key'
+  // Group 1 = quote char, Group 2 = literal key content
+  const startRe = new RegExp(
+    `\\{\\{\\s*(?:${escapedNames})\\(\\s*(['"\`])([^'"\`\\n]+)\\1`,
+    'g',
+  )
+
+  let result = ''
+  let cursor = 0
+
+  let m: RegExpExecArray | null
+  while ((m = startRe.exec(content)) !== null) {
+    const interpStart = m.index
+    const key = m[2]
+
+    // Skip template literals with dynamic expressions
+    if (key.includes('${')) continue
+
+    // Find matching }} by counting {{ / }} pairs
+    let depth = 0
+    let i = interpStart
+    let interpEnd = -1
+
+    while (i < content.length - 1) {
+      if (content[i] === '{' && content[i + 1] === '{') {
+        depth++
+        i += 2
+      } else if (content[i] === '}' && content[i + 1] === '}') {
+        depth--
+        if (depth === 0) {
+          interpEnd = i + 2
+          break
+        }
+        i += 2
+      } else {
+        i++
+      }
+    }
+
+    if (interpEnd === -1) continue
+
+    // Skip if already wrapped — text right after the interpolation starts with </I18nInspect>
+    if (/^\s*<\/I18nInspect>/.test(content.slice(interpEnd))) {
+      result += content.slice(cursor, interpEnd)
+      cursor = interpEnd
+      startRe.lastIndex = interpEnd
+      continue
+    }
+
+    const safeKey    = key.replace(/"/g, '&quot;')
+    const fullInterp = content.slice(interpStart, interpEnd)
+
+    result += content.slice(cursor, interpStart)
+    result += `<I18nInspect i18n-key="${safeKey}">${fullInterp}</I18nInspect>`
+    cursor = interpEnd
+    startRe.lastIndex = interpEnd
+  }
+
+  result += content.slice(cursor)
+
+  if (result === content) return
+  return before + result + after
+}
+
+/**
+ * Generates the browser-side dev overlay entry module.
+ *
+ * The pre-compiled overlay bundle (`dist/vite-plugin/dev-overlay/index.js`)
+ * is read from disk and inlined directly into the virtual module body.
+ * This avoids any `server.fs.allow` / `/@fs/` restrictions — Vite always
+ * serves virtual module content, regardless of where the plugin lives on disk.
+ *
+ * The bundle's `export { ... }` block is replaced with local `const` aliases
+ * so that `I18nInspect` and `DevOverlay` are available in scope for the
+ * bootstrap code appended below.
+ *
+ * @internal
+ */
+function buildDevOverlayCode(uiUrl: string, overlayIndexPath: string, iframeWidth: string): string {
+  let overlayContent: string
+  try {
+    overlayContent = readFileSync(overlayIndexPath, 'utf-8')
+  } catch {
+    return `console.error('[vue-i18n-kit] dev overlay bundle not found: ${overlayIndexPath.replace(/\\/g, '/')}')`
+  }
+
+  // Replace `export { origName as alias, ... }` at the end of the bundle with
+  // `const alias = origName` local declarations so the names stay in scope.
+  const strippedContent = overlayContent.replace(
+    /export\s*\{([\s\S]*?)\}\s*;?\s*$/,
+    (_match, body: string) =>
+      body
+        .split(',')
+        .map((s) => s.trim())
+        .filter(Boolean)
+        .map((s) => {
+          const m = s.match(/^(\S+)\s+as\s+(\S+)$/)
+          return m ? `const ${m[2]} = ${m[1]}` : `/* ${s} — already in scope */`
+        })
+        .join('\n'),
+  )
+
+  const uiUrlJson = JSON.stringify(uiUrl)
+
+  return `
+import { createApp } from 'vue'
+
+// ── Inlined overlay bundle ────────────────────────────────────────────────────
+// Sourced from dist/vite-plugin/dev-overlay/index.js at plugin load time.
+// Inlined to avoid server.fs.allow restrictions on paths outside project root.
+${strippedContent}
+
+// ── Bootstrap ─────────────────────────────────────────────────────────────────
+window.__I18N_KIT_INSPECT_COMPONENT__ = I18nInspect
+window.__I18N_KIT_INSPECT_DIRECTIVE__ = vI18nInspect
+window.__I18N_KIT_UI_URL__ = ${uiUrlJson}
+
+function __ik_mountOverlay() {
+  if (document.getElementById('__i18n-kit-overlay__')) return
+  const el = document.createElement('div')
+  el.id = '__i18n-kit-overlay__'
+  document.body.appendChild(el)
+  createApp(DevOverlay, { uiUrl: ${uiUrlJson}, iframeWidth: ${JSON.stringify(iframeWidth)} }).mount(el)
+}
+
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', __ik_mountOverlay)
+} else {
+  __ik_mountOverlay()
+}
+`
 }

@@ -4,7 +4,7 @@ import {
 } from '@clack/prompts'
 import { existsSync, writeFileSync, mkdirSync, readFileSync } from 'node:fs'
 import { join, relative, resolve, dirname } from 'node:path'
-import { discoverLocales, updateConfig, findProjectConfig, type DiscoveredLocale } from './auto-config.js'
+import { discoverLocales, updateConfig, updateDevPlugin, findProjectConfig, type DiscoveredLocale } from './auto-config.js'
 import {
   readConfig, writeConfig, backupFile,
   buildLegacyLocalesConfig, CONFIG_FILENAME,
@@ -14,6 +14,40 @@ import type { I18nKitConfig, LocaleConfig, LocaleMeta } from '../../config/schem
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 /** Returns the absolute path to the app entry file, or null if not found. */
+/** Merges i18n-ally settings into .vscode/settings.json. */
+function generateAllySettings(
+  cwd: string,
+  newLocales: LocaleConfig[],
+  localesDir: string,
+): string {
+  const vscodePath = resolve(cwd, '.vscode')
+  const settingsPath = resolve(vscodePath, 'settings.json')
+
+  mkdirSync(vscodePath, { recursive: true })
+
+  let existing: Record<string, unknown> = {}
+  if (existsSync(settingsPath)) {
+    try { existing = JSON.parse(readFileSync(settingsPath, 'utf-8')) as Record<string, unknown> } catch { /* ignore */ }
+  }
+
+  const codes = newLocales.map(l => l.code)
+  const defaultCode = codes[0] ?? 'en'
+  // Build path matcher relative to project root, e.g. "src/locales/{locale}.json"
+  const pathMatcher = `${localesDir}/{locale}.json`
+
+  const allySettings: Record<string, unknown> = {
+    'i18n-ally.locales': codes,
+    'i18n-ally.pathMatcher': pathMatcher,
+    'i18n-ally.sourceLanguage': defaultCode,
+    'i18n-ally.enabledParsers': ['json'],
+    'i18n-ally.keystyle': 'nested',
+  }
+
+  const merged = { ...existing, ...allySettings }
+  writeFileSync(settingsPath, JSON.stringify(merged, null, 2) + '\n', 'utf-8')
+  return '.vscode/settings.json'
+}
+
 function findMainEntryFile(cwd: string): string | null {
   const candidates = [
     'src/main.ts', 'src/main.js', 'src/main.mts',
@@ -51,6 +85,19 @@ function buildPluginSnippet(locales: LocaleConfig[], _localesDir: string): strin
     `  },`,
     `  persistLocale: true,`,
     `}))`,
+  ].join('\n')
+}
+
+/** Generates the in-context editor registration snippet for main.ts. */
+function buildDevPluginSnippet(): string {
+  return [
+    `// In-context editor: register globals exposed by vueI18nDevPlugin (dev only)`,
+    `if (import.meta.env.DEV && window.__I18N_KIT_INSPECT_COMPONENT__) {`,
+    `  app.component('I18nInspect', window.__I18N_KIT_INSPECT_COMPONENT__)`,
+    `}`,
+    `if (import.meta.env.DEV && window.__I18N_KIT_INSPECT_DIRECTIVE__) {`,
+    `  app.directive('i18n-inspect', window.__I18N_KIT_INSPECT_DIRECTIVE__)`,
+    `}`,
   ].join('\n')
 }
 
@@ -275,11 +322,14 @@ async function runWizardFlow(
   // ── Step 3: Integration ───────────────────────────────────────────────────────
   const projectConfig = findProjectConfig(cwd)
   let addPlugin = false
+  let addDevPlugin = false
 
   if (projectConfig) {
     const kindLabel = projectConfig.kind === 'nuxt' ? 'nuxt.config.ts' : 'vite.config.ts'
-    const alreadyHasPlugin = readFileSync(projectConfig.path, 'utf-8').includes('vueI18nMapPlugin(')
+    const configContent = readFileSync(projectConfig.path, 'utf-8')
 
+    // vueI18nMapPlugin
+    const alreadyHasPlugin = configContent.includes('vueI18nMapPlugin(')
     if (alreadyHasPlugin) {
       log.info(`${kindLabel} already contains vueI18nMapPlugin — it will be updated.`)
       addPlugin = true
@@ -291,7 +341,29 @@ async function runWizardFlow(
       abortIfCancel(integrate)
       addPlugin = integrate as boolean
     }
+
+    // vueI18nDevPlugin (Vite only — enables in-context translation editor)
+    if (projectConfig.kind === 'vite') {
+      const alreadyHasDevPlugin = configContent.includes('vueI18nDevPlugin(')
+      if (alreadyHasDevPlugin) {
+        log.info(`${kindLabel} already contains vueI18nDevPlugin — skipping.`)
+      } else {
+        const integrateEditor = await confirm({
+          message: `Add vueI18nDevPlugin (in-context translation editor) to ${kindLabel}?`,
+          initialValue: true,
+        })
+        abortIfCancel(integrateEditor)
+        addDevPlugin = integrateEditor as boolean
+      }
+    }
   }
+
+  // ── Step 3b: i18n Ally ───────────────────────────────────────────────────────
+  const doAlly = await confirm({
+    message: 'Generate .vscode/settings.json for i18n Ally VS Code extension?',
+    initialValue: false,
+  })
+  abortIfCancel(doAlly)
 
   // ── Step 4: Build the new config object ───────────────────────────────────────
   const localesDirStr = (localesDir as string).trim()
@@ -346,9 +418,9 @@ async function runWizardFlow(
   const mainEntryLabel = mainEntryFile
     ? relative(cwd, mainEntryFile).replace(/\\/g, '/')
     : 'main.ts'
-  const mainAlreadySetup = mainEntryFile
-    ? readFileSync(mainEntryFile, 'utf-8').includes('createVueI18nPlugin')
-    : false
+  const mainContent = mainEntryFile ? readFileSync(mainEntryFile, 'utf-8') : ''
+  const mainAlreadySetup = mainContent.includes('createVueI18nPlugin')
+  const mainHasDevPlugin = mainContent.includes('__I18N_KIT_INSPECT_COMPONENT__')
 
   let showMainSnippet = false
   if (!mainAlreadySetup) {
@@ -419,10 +491,20 @@ async function runWizardFlow(
     }
 
     // vite / nuxt config
-    if (addPlugin && projectConfig) {
+    if ((addPlugin || addDevPlugin) && projectConfig) {
       backupFile(projectConfig.path)
-      updateConfig(projectConfig.path, projectConfig.kind, toDiscoveredLocales(cwd, newLocales))
+      if (addPlugin) {
+        updateConfig(projectConfig.path, projectConfig.kind, toDiscoveredLocales(cwd, newLocales))
+      }
+      if (addDevPlugin) {
+        updateDevPlugin(projectConfig.path, projectConfig.kind)
+      }
       written.push(relative(cwd, projectConfig.path).replace(/\\/g, '/'))
+    }
+
+    // i18n Ally
+    if (doAlly) {
+      written.push(generateAllySettings(cwd, newLocales, localesDirStr))
     }
 
     sp.stop('Done.')
@@ -437,8 +519,18 @@ async function runWizardFlow(
   const skippedList = skipped.length > 0 ? '\n\nSkipped (kept existing):\n' + skipped.map(f => `  –  ${f}`).join('\n') : ''
   note(writtenList + skippedList, 'Files written')
 
-  if (showMainSnippet) {
-    note(buildPluginSnippet(newLocales, localesDirStr), `Add to ${mainEntryLabel}`)
+  const showDevSnippet = !mainHasDevPlugin
+  if (showMainSnippet || showDevSnippet) {
+    log.info(`Add to ${mainEntryLabel}:`)
+    console.log()
+    if (showMainSnippet) {
+      buildPluginSnippet(newLocales, localesDirStr).split('\n').forEach(l => console.log(`  ${l}`))
+      console.log()
+    }
+    if (showDevSnippet) {
+      buildDevPluginSnippet().split('\n').forEach(l => console.log(`  ${l}`))
+      console.log()
+    }
   }
 
   outro(
