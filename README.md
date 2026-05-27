@@ -4,12 +4,58 @@
   </h1>
   <img
     src="https://s3.twcstorage.ru/c9a2cc89-780f97fd-311d-4a1a-b86f-c25665c9dc46/images/npm/vue-i18n-kit.webp"
-    alt="vue-virtual-scroller-kit"
+    alt="vue-i18n-kit"
     style="max-width:100%;width:auto;height:300px;border-radius:12px"
   />
 </div>
 
 A reusable Vue 3 localization plugin that wraps [`vue-i18n`](https://vue-i18n.intlify.dev/) and provides a ready-to-use integration layer — set up once, reuse across every project in your team.
+
+---
+
+## Contents
+
+- [Features](#features)
+- [Requirements](#requirements)
+- [Installation](#installation)
+- [Quick start](#quick-start)
+- [Plugin options](#plugin-options)
+- [useLocale](#uselocale)
+- [useT](#uset)
+- [useAvailableLocales](#useavailablelocales)
+- [useFormat](#useformat)
+- [usePluralize](#usepluralize)
+- [Plugin service](#plugin-service)
+- [TypeScript](#typescript)
+- [Error handling](#error-handling)
+- [Locale persistence](#locale-persistence)
+- [Vite plugin — completeness check](#vite-plugin--translation-completeness-check)
+- [Vite plugin — inline translations](#vite-plugin--inline-translations)
+- [Vite plugin — namespace code splitting](#vite-plugin--namespace-code-splitting)
+- [Vite plugin — in-context editor](#vite-plugin--in-context-translation-editor-dev-only)
+- [CLI — init](#init--interactive-setup-wizard)
+- [CLI — add](#add--add-a-new-locale)
+- [CLI — check](#check--audit-translation-completeness)
+- [CLI — merge](#merge--merge-a-shared-dictionary)
+- [CLI — prune](#prune--remove-unused-keys)
+- [CLI — types](#types--generate-typescript-types)
+- [CLI — split / merge-ns](#split--split-a-monolithic-locale-into-namespaces)
+- [CLI — stale](#stale--show-outdated-translations)
+- [CLI — export / import](#export--export-for-translators-xliff--po)
+- [CLI — stats](#coverage-report-vue-i18n-kit-stats)
+- [Stale translation detection](#stale-translation-detection)
+- [XLIFF / PO export & import](#xliff--po-export--import)
+- [Machine translation](#machine-translation)
+- [Locale editor UI](#locale-editor-ui)
+- [Base dictionary (extends)](#base-dictionary-extends)
+- [Locked keys](#locked-keys)
+- [Validation rules](#validation-rules-rules)
+- [Ignore lists](#ignore-lists-ignore)
+- [Nuxt & SSR](#nuxt--ssr)
+- [Architecture](#architecture)
+- [Bundle size & peer dependencies](#bundle-size--peer-dependencies)
+
+---
 
 ## Features
 
@@ -43,6 +89,8 @@ A reusable Vue 3 localization plugin that wraps [`vue-i18n`](https://vue-i18n.in
 - **Machine translation** — auto-translate missing keys via LibreTranslate or DeepL (500k chars/month free); ICU placeholders and plurals are encoded as opaque XML tags so they survive translation intact
 - **Locale Editor UI** — browser-based editor with dashboard, inline editing, group operations, phantom key detection, plural preview, stale filter, XLIFF/PO export-import, and more
 
+---
+
 ## Requirements
 
 | Peer dependency | Version | Required |
@@ -53,6 +101,8 @@ A reusable Vue 3 localization plugin that wraps [`vue-i18n`](https://vue-i18n.in
 
 Neither `vue` nor `vue-i18n` is bundled — they must be installed in the consuming project.
 
+---
+
 ## Installation
 
 ```bash
@@ -61,7 +111,7 @@ npm install vue-i18n-kit vue vue-i18n
 
 ---
 
-## Quick Start
+## Quick start
 
 ### 1. Create locale files
 
@@ -146,7 +196,6 @@ const { availableLocales } = useAvailableLocales()
     <p>{{ t('greeting', { name: 'Alice' }) }}</p>
     <p>{{ tm('items', { count: 5 }) }}</p>
 
-    <!-- Locale selector with display names from meta -->
     <select :value="locale" @change="setLocale(($event.target as HTMLSelectElement).value)">
       <option v-for="loc in availableLocales" :key="loc.code" :value="loc.code">
         {{ loc.meta?.flag }} {{ loc.meta?.display ?? loc.code }}
@@ -154,9 +203,7 @@ const { availableLocales } = useAvailableLocales()
     </select>
 
     <span v-if="isLoading">Loading…</span>
-
     <button :disabled="isLoading">{{ t('buttons.submit') }}</button>
-
     <p>Active: {{ localeMeta?.flag }} {{ localeMeta?.display }}</p>
   </div>
 </template>
@@ -164,13 +211,13 @@ const { availableLocales } = useAvailableLocales()
 
 ---
 
-## Plugin Options
+## Plugin options
 
 ```ts
 interface I18nPluginOptions {
   defaultLocale: string
   fallbackLocale?: string
-  locales: Record<string, LocaleEntry>   // see "Locale entry formats" below
+  locales: Record<string, LocaleEntry>
   persistLocale?: boolean
   storageKey?: string
   vueI18nOptions?: Record<string, unknown>
@@ -190,7 +237,7 @@ interface I18nPluginOptions {
 
 Each locale in the `locales` map accepts one of three forms. They can be freely mixed within the same config.
 
-#### 1. Plain message object (synchronous)
+**1. Plain message object (synchronous)**
 
 ```ts
 locales: {
@@ -200,7 +247,7 @@ locales: {
 
 Messages are bundled into the app at build time and available immediately.
 
-#### 2. Async loader function (lazy)
+**2. Async loader function (lazy)**
 
 ```ts
 locales: {
@@ -210,12 +257,12 @@ locales: {
 
 The JSON file is fetched only when `setLocale('ru')` is called. Until then it has zero impact on the initial bundle size.
 
-#### 3. `LocaleDefinition` — messages + custom metadata
+**3. `LocaleDefinition` — messages + custom metadata**
 
 ```ts
 locales: {
   en: {
-    messages: () => import('./locales/en.json'),  // loader or plain object
+    messages: () => import('./locales/en.json'),
     meta: { display: 'English', flag: '🇬🇧' },
   },
   ru: {
@@ -225,17 +272,11 @@ locales: {
 }
 ```
 
-`meta` is an arbitrary object — the shape is entirely up to the project. It is accessible through `useLocale().localeMeta` and `useAvailableLocales().availableLocales[n].meta`. All three forms can be mixed freely in the same `locales` map (locales without `meta` return `undefined` for it).
-
-> **Note:** `LocaleDefinition` is identified internally by the presence of `meta` or a function-typed `messages`. If your translation files happen to have a top-level `messages` key with a string value, they will not be misidentified.
-
-The `defaultLocale` and `fallbackLocale` are pre-loaded synchronously when their messages are a plain object. Lazy loaders set `isLoading: true` until the initial fetch completes.
+`meta` is an arbitrary object — the shape is entirely up to the project. It is accessible through `useLocale().localeMeta` and `useAvailableLocales().availableLocales[n].meta`. All three forms can be mixed freely in the same `locales` map.
 
 ---
 
-## Composables
-
-### `useLocale()`
+## useLocale
 
 Returns the current locale, a switcher function, a loading flag, and the active locale's metadata.
 
@@ -248,9 +289,9 @@ const { locale, setLocale, isLoading, localeMeta } = useLocale()
 | Return value | Type | Description |
 |---|---|---|
 | `locale` | `Ref<string>` | Currently active locale code (reactive). |
-| `setLocale` | `(lang: string) => Promise<void>` | Switch to a different locale. Lazy-loads the JSON if needed, then updates `locale`. Throws if `lang` is not registered in `locales`. |
+| `setLocale` | `(lang: string) => Promise<void>` | Switch to a different locale. Lazy-loads the JSON if needed, then updates `locale`. Throws if `lang` is not registered. |
 | `isLoading` | `Ref<boolean>` | `true` while a locale's JSON is being fetched. |
-| `localeMeta` | `ComputedRef<Record<string, unknown> \| undefined>` | Metadata of the active locale from its `LocaleDefinition.meta`, or `undefined` if none was provided. Updates reactively on locale switch. |
+| `localeMeta` | `ComputedRef<Record<string, unknown> \| undefined>` | Metadata of the active locale from its `LocaleDefinition.meta`. Updates reactively on locale switch. |
 
 Pass a generic type for typed `localeMeta` without manual casting:
 
@@ -298,7 +339,7 @@ async function handleChange(code: string) {
 
 ---
 
-### `useT()`
+## useT
 
 The primary translation composable. Returns two methods — `t` for plain strings and `tm` for ICU-pluralized strings. Both are locale-reactive and update automatically when the active locale changes.
 
@@ -308,7 +349,7 @@ import { useT } from 'vue-i18n-kit'
 const { t, tm } = useT()
 ```
 
-#### `t(key, vars?)`
+### `t(key, vars?)`
 
 Looks up a key in the active locale file and interpolates named `{placeholder}` tokens.
 
@@ -322,16 +363,7 @@ t('greeting', { name: 'Alice' })      // → 'Hello, Alice!'
 | `key` | `string` | Dot-separated path in the locale file (`'buttons.submit'`, `'greeting'`). |
 | `vars` | `object` | Optional. Named values substituted into `{placeholder}` tokens. |
 
-Locale file:
-
-```json
-{
-  "buttons": { "submit": "Submit" },
-  "greeting": "Hello, {name}!"
-}
-```
-
-#### `tm(key, vars)`
+### `tm(key, vars)`
 
 Looks up a key whose value is an ICU plural template, then selects the correct plural form using `Intl.PluralRules` for the active locale.
 
@@ -340,20 +372,6 @@ tm('items',   { count: 1  })   // → '1 item'
 tm('items',   { count: 5  })   // → '5 items'
 tm('balance', { points: 3 })   // → '3 рубля'
 tm('balance', { points: 11 })  // → '11 рублей'
-```
-
-| Argument | Type | Description |
-|---|---|---|
-| `key` | `string` | Locale key whose value is an ICU template. Can also be a direct ICU template string (used as-is when the key is not found). |
-| `vars` | `PluralVars` | Values used for plural category selection and `{var}` / `#` substitution. |
-
-Locale file:
-
-```json
-{
-  "items":   "{count, plural, one {# item} other {# items}}",
-  "balance": "{points} {points, plural, one {рубль} few {рубля} many {рублей} other {рублей}}"
-}
 ```
 
 **ICU template syntax:**
@@ -373,11 +391,6 @@ tm('balance', { points: 21 })
 // locale: "{points} {points, plural, one {рубль} few {рубля} many {рублей} other {рублей}}"
 // → '21 рубль'
 
-// Using # as the numeric placeholder
-tm('items', { count: 5 })
-// locale: "{count, plural, one {# item} other {# items}}"
-// → '5 items'
-
 // Multiple variables
 tm('score', { user: 'Даня', score: 21 })
 // locale: "{user} набрал {score} {score, plural, one {балл} few {балла} many {баллов} other {баллов}}"
@@ -385,7 +398,6 @@ tm('score', { user: 'Даня', score: 21 })
 
 // Multiple plural constructs in one string
 tm('report', { files: 2, errors: 5 })
-// locale: "{files, plural, one {# файл} few {# файла} many {# файлов} other {# файлов}} ({errors, plural, one {# ошибка} few {# ошибки} many {# ошибок} other {# ошибок}})"
 // → '2 файла (5 ошибок)'
 ```
 
@@ -402,7 +414,7 @@ Full rules: [CLDR Plural Rules](https://www.unicode.org/cldr/charts/latest/suppl
 
 ---
 
-### `useAvailableLocales()`
+## useAvailableLocales
 
 Returns a computed list of all locales registered in the plugin config. Each item is a `LocaleInfo` object containing the locale code and its metadata.
 
@@ -430,11 +442,9 @@ const { availableLocales } = useAvailableLocales<AppLocaleMeta>()
 availableLocales.value[0].meta?.display  // string | undefined
 ```
 
-Locales registered as plain objects or functions (without `LocaleDefinition`) have `meta: undefined` and still appear in the list.
-
 ---
 
-### `useFormat()`
+## useFormat
 
 Provides locale-aware formatting using the native `Intl` APIs. All formatters automatically use the currently active locale and update when the locale is switched.
 
@@ -444,7 +454,7 @@ import { useFormat } from 'vue-i18n-kit'
 const { formatDate, formatNumber, formatCurrency } = useFormat()
 ```
 
-#### `formatDate(value, options?)`
+### `formatDate(value, options?)`
 
 ```ts
 // value: Date | number (timestamp) | string (ISO)
@@ -456,52 +466,27 @@ formatDate(new Date(), { dateStyle: 'long' })                   // 'March 28, 20
 formatDate(new Date(), { hour: '2-digit', minute: '2-digit' })  // '19:45'
 ```
 
-#### `formatNumber(value, options?)`
+### `formatNumber(value, options?)`
 
 ```ts
-// options: Intl.NumberFormatOptions
-
 formatNumber(1_234_567.89)                    // '1 234 567,89'  (ru)
 formatNumber(1_234_567.89)                    // '1,234,567.89'  (en)
 formatNumber(0.42, { style: 'percent' })      // '42 %'
 ```
 
-#### `formatCurrency(value, currency, options?)`
+### `formatCurrency(value, currency, options?)`
 
 ```ts
 // currency: ISO 4217 code (USD, EUR, RUB, ...)
-// options: Intl.NumberFormatOptions (except style and currency)
 
-formatCurrency(1999.99, 'USD')                              // '$1,999.99'   (en)
-formatCurrency(1999.99, 'EUR')                              // '1 999,99 €'  (ru)
+formatCurrency(1999.99, 'USD')                               // '$1,999.99'   (en)
+formatCurrency(1999.99, 'EUR')                               // '1 999,99 €'  (ru)
 formatCurrency(1999,    'USD', { minimumFractionDigits: 0 }) // '$1,999'
-```
-
-**Example in a component:**
-
-```vue
-<script setup lang="ts">
-import { useFormat, useLocale } from 'vue-i18n-kit'
-
-const { formatDate, formatNumber, formatCurrency } = useFormat()
-const { setLocale } = useLocale()
-
-const price = 4299.0
-const today = new Date()
-</script>
-
-<template>
-  <p>{{ formatDate(today, { dateStyle: 'long' }) }}</p>
-  <p>{{ formatCurrency(price, 'EUR') }}</p>
-
-  <button @click="setLocale('en')">EN</button>
-  <button @click="setLocale('ru')">RU</button>
-</template>
 ```
 
 ---
 
-### `usePluralize()` — low-level plural API
+## usePluralize
 
 For ICU pluralization use `tm()` from `useT()` — it is the primary API. `usePluralize` exposes one additional utility: `pluralCategory`, which returns the raw CLDR category for a count value.
 
@@ -511,7 +496,7 @@ import { usePluralize } from 'vue-i18n-kit'
 const { pluralCategory } = usePluralize()
 ```
 
-#### `pluralCategory(count)`
+### `pluralCategory(count)`
 
 Returns the raw CLDR plural category string for `count` in the active locale. Useful for applying CSS classes or driving conditional rendering.
 
@@ -528,7 +513,7 @@ pluralCategory(5)   // 'many'
 
 ---
 
-## Plugin Service
+## Plugin service
 
 `createVueI18nPlugin` returns an `I18nPlugin` object — it satisfies Vue's `Plugin` interface (so `app.use(plugin)` works unchanged) and exposes a `.service` property that is usable **anywhere in the application**, including outside Vue component `setup()`.
 
@@ -542,11 +527,6 @@ export const i18nPlugin = createVueI18nPlugin({
     ru: { messages: () => import('./locales/ru.json'), meta: { display: 'Русский' } },
   },
 })
-```
-
-```ts
-// main.ts
-app.use(i18nPlugin)   // install as before
 ```
 
 ```ts
@@ -569,12 +549,6 @@ router.beforeEach(async (to) => {
 | `availableLocales` | `ComputedRef<LocaleInfo[]>` | All registered locales with their metadata. Same computed instance on every access. |
 | `onLocaleChange` | `(cb: (lang: string) => void) => () => void` | Subscribe to locale switches. Returns an unsubscribe function. |
 
-All properties throw a descriptive error if accessed before `app.use(plugin)`:
-
-```
-[vue-i18n-kit] Plugin is not installed yet. Call app.use(plugin) before using service.
-```
-
 ### `onLocaleChange`
 
 Subscribe to locale switches from anywhere — useful for syncing external state that cannot be driven by Vue reactivity.
@@ -589,15 +563,10 @@ i18nPlugin.service.onLocaleChange((lang) => {
 const unsubscribe = i18nPlugin.service.onLocaleChange((lang) => {
   analytics.track('locale_changed', { lang })
 })
-// later:
 unsubscribe()
 ```
 
-Multiple subscribers are supported. Each call to `onLocaleChange` registers an independent callback; all are called in registration order after every successful `setLocale`.
-
 ### `service` vs composables — when to use which
-
-Both APIs control the same underlying locale state. Choose based on **where** the code runs:
 
 | Context | Recommended API |
 |---|---|
@@ -605,34 +574,25 @@ Both APIs control the same underlying locale state. Choose based on **where** th
 | Router guards, Pinia stores, utility modules | `plugin.service` — no `getCurrentInstance()` needed |
 | SSR entry points, server middleware | `plugin.service` — inject the plugin instance from your plugin file |
 
-There is no functional difference between `useLocale().setLocale('en')` and `plugin.service.setLocale('en')` — both mutate the same ref and trigger the same reactivity. The composables are simply the ergonomic wrapper for component scope.
-
-> **Do not mix both APIs to manage the same locale switch.** Calling `useLocale().setLocale()` in a component and also `service.setLocale()` in a router guard for the same navigation event will trigger two back-to-back locale loads. Pick one callsite per action.
-
 ### SSR note
 
-`service` stores state in a closure created when `createVueI18nPlugin` is called. In SSR this means the plugin **must be created per request**, not at module level:
+`service` stores state in a closure created when `createVueI18nPlugin` is called. In SSR the plugin **must be created per request**, not at module level:
 
 ```ts
 // ✅ Correct — one plugin instance per Nuxt request
 export default defineNuxtPlugin((nuxtApp) => {
   const plugin = createVueI18nPlugin({ ... })
   nuxtApp.vueApp.use(plugin)
-  // plugin.service is safe to use here — scoped to this request
 })
 ```
 
 ```ts
 // ❌ Wrong — shared across all SSR requests
 const plugin = createVueI18nPlugin({ ... })   // module level
-
 export default defineNuxtPlugin((nuxtApp) => {
-  nuxtApp.vueApp.use(plugin)
-  // plugin.service.locale is shared — requests will contaminate each other
+  nuxtApp.vueApp.use(plugin)   // plugin.service.locale is shared — requests contaminate each other
 })
 ```
-
-For client-only Vue apps (SPA) this distinction does not apply — the module executes once per page load.
 
 ---
 
@@ -679,7 +639,6 @@ export interface AppLocaleMeta {
 ```
 
 ```ts
-// In any component
 import type { AppLocaleMeta } from '@/types/i18n'
 import { useLocale, useAvailableLocales } from 'vue-i18n-kit'
 
@@ -692,7 +651,7 @@ availableLocales.value[0].meta?.flag  // string | undefined  ✓
 
 ---
 
-## Error Handling
+## Error handling
 
 ### Unknown locale
 
@@ -709,20 +668,11 @@ try {
 
 ### Failed network request
 
-If the async loader function rejects, `setLocale` resets `isLoading` to `false` and re-throws the original error:
-
-```ts
-try {
-  await setLocale('ru')
-} catch (err) {
-  // Handle fetch / import error
-}
-// isLoading.value is guaranteed to be false here
-```
+If the async loader function rejects, `setLocale` resets `isLoading` to `false` and re-throws the original error. `isLoading.value` is guaranteed to be `false` after the `catch` block.
 
 ### Plugin not installed
 
-Calling any composable before `app.use(createVueI18nPlugin(...))` throws immediately with a clear message:
+Calling any composable before `app.use(createVueI18nPlugin(...))` throws immediately:
 
 ```
 [vue-i18n-kit] Plugin not installed. Call app.use(createVueI18nPlugin(...)) before using composables.
@@ -730,36 +680,23 @@ Calling any composable before `app.use(createVueI18nPlugin(...))` throws immedia
 
 ---
 
-## Locale Persistence
+## Locale persistence
 
 When `persistLocale: true` is set, the selected locale is saved to `localStorage` under the configured `storageKey`. On the next page load the plugin reads this value and uses it as the initial locale, falling back to `defaultLocale` if the saved value is not a registered locale code.
-
-```ts
-app.use(createVueI18nPlugin({
-  defaultLocale: 'en',
-  locales: { en: enMessages, ru: ruMessages },
-  persistLocale: true,
-  storageKey: 'my-app-locale',   // optional, default: 'vue3-i18n-locale'
-}))
-```
 
 `localStorage` calls are wrapped in `try/catch` so the plugin works without issues in environments where storage is restricted (private browsing, certain iframe contexts).
 
 ### `persistLocale` vs manual `localStorage`
 
-Two patterns exist for persisting the locale — choose one and stick to it. Mixing them creates two writers on the same key and leads to unpredictable restore order.
-
 | | `persistLocale: true` | Manual `localStorage` |
 |---|---|---|
 | **Setup** | One option in `createVueI18nPlugin` | Read on startup, write in `onLocaleChange` |
 | **Restore on page load** | Automatic | You read the key and pass the value as `defaultLocale` |
-| **Control** | Plugin-managed | Full control over key name, storage type, serialization |
 | **Good when** | You just need locale to survive a page reload | You store extra data alongside the locale, use `sessionStorage`, or share the key with other parts of the app |
 
 **Option A — let the plugin handle it (recommended for most projects):**
 
 ```ts
-// main.ts — nothing else needed
 app.use(createVueI18nPlugin({
   defaultLocale: 'en',
   locales: { ... },
@@ -770,54 +707,35 @@ app.use(createVueI18nPlugin({
 **Option B — manage storage yourself:**
 
 ```ts
-// main.ts — read persisted locale and pass it as defaultLocale
 const saved = localStorage.getItem('my-locale')
 const initial = ['en', 'ru'].includes(saved ?? '') ? saved! : 'en'
 
 app.use(i18nPlugin)   // persistLocale is NOT set
 
-// Write on every switch
 i18nPlugin.service.onLocaleChange((lang) => {
   localStorage.setItem('my-locale', lang)
 })
 ```
 
-> **Do not combine both options for the same storage key.** If `persistLocale: true` is set and you also call `localStorage.setItem` manually, the plugin will overwrite your value on the next `setLocale`, and your code will overwrite the plugin's value on the next navigation.
-
-### Using a custom storage key
-
-When `persistLocale: true` is set, use `storageKey` to avoid conflicts when multiple apps share the same origin:
-
-```ts
-app.use(createVueI18nPlugin({
-  defaultLocale: 'en',
-  locales: { en: enMessages, ru: ruMessages },
-  persistLocale: true,
-  storageKey: 'my-app-locale',   // default: 'vue3-i18n-locale'
-}))
-```
+> **Do not combine both options for the same storage key.** If `persistLocale: true` is set and you also call `localStorage.setItem` manually, the plugin will overwrite your value on the next `setLocale`.
 
 ---
 
-## Vite Plugin — Translation Completeness Check
+## Vite plugin — Translation completeness check
 
 Checks all locale JSON files against a reference locale and reports any missing or extra keys. Runs at `buildStart` and on every locale file save during development (HMR).
 
-### Setup
-
 ```ts
 // vite.config.ts
-import { defineConfig } from 'vite'
-import vue from '@vitejs/plugin-vue'
 import { vueI18nCheckPlugin } from 'vue-i18n-kit/vite'
 
 export default defineConfig({
   plugins: [
     vue(),
     vueI18nCheckPlugin({
-      localesDir: 'src/locales',   // relative to project root
-      defaultLocale: 'en',         // reference locale
-      failOnMissing: true,         // abort build on missing keys
+      localesDir: 'src/locales',
+      defaultLocale: 'en',
+      failOnMissing: true,
     }),
   ],
 })
@@ -829,7 +747,7 @@ export default defineConfig({
 |---|---|---|---|
 | `localesDir` | `string` | `'src/locales'` | Directory containing locale JSON files, relative to Vite project root. |
 | `defaultLocale` | `string` | first file alphabetically | Locale used as the reference when comparing keys. |
-| `failOnMissing` | `boolean` | `false` | When `true`, missing keys abort the build with an error. When `false`, missing keys produce warnings only. |
+| `failOnMissing` | `boolean` | `false` | When `true`, missing keys abort the build with an error. |
 
 ### Example output
 
@@ -848,18 +766,14 @@ export default defineConfig({
 
 ---
 
-## Vite Plugin — Inline Translations
+## Vite plugin — Inline translations
 
 `vueI18nInlinePlugin` bakes all locale JSON files into the production bundle at build time via a virtual module. There are **no runtime HTTP requests** — the translations are a plain JavaScript object embedded in the bundle.
 
 Ideal for: SSR apps, offline-capable PWAs, small projects where bundle size matters less than loading latency.
 
-### Setup
-
 ```ts
 // vite.config.ts
-import { defineConfig } from 'vite'
-import vue from '@vitejs/plugin-vue'
 import { vueI18nInlinePlugin } from 'vue-i18n-kit/vite'
 
 export default defineConfig({
@@ -879,8 +793,6 @@ export default defineConfig({
 ### Usage in your app
 
 ```ts
-// main.ts
-import { createVueI18nPlugin } from 'vue-i18n-kit'
 import inlineLocales from 'virtual:vue-i18n-kit/locales'
 
 app.use(
@@ -889,17 +801,12 @@ app.use(
     locales: {
       en: { messages: inlineLocales.en, meta: { display: 'English' } },
       ru: { messages: inlineLocales.ru, meta: { display: 'Русский' } },
-      de: { messages: inlineLocales.de, meta: { display: 'Deutsch' } },
     },
   })
 )
 ```
 
-Because `inlineLocales.ru` is a plain object (not a function), `vue-i18n-kit` skips the network request and uses it directly.
-
-### TypeScript — virtual module type declaration
-
-Add to your project's `env.d.ts` or `vite-env.d.ts`:
+TypeScript — add to `env.d.ts` or `vite-env.d.ts`:
 
 ```ts
 declare module 'virtual:vue-i18n-kit/locales' {
@@ -908,33 +815,21 @@ declare module 'virtual:vue-i18n-kit/locales' {
 }
 ```
 
-### Options
-
-| Option | Type | Description |
-|---|---|---|
-| `locales` | `Record<string, string \| { path, meta? }>` | Map of locale codes to JSON file paths (relative to project root). |
-
 ---
 
-## Vite Plugin — Namespace Code Splitting
+## Vite plugin — Namespace code splitting
 
 `vueI18nNamespacePlugin` scans a directory of split locale files and generates the virtual module `virtual:vue-i18n-namespaces`. The module exports a `locales` object ready to pass to `createVueI18nPlugin` — each locale entry includes per-namespace dynamic `import()` calls so Vite code-splits them automatically.
 
-Combine with [`vue-i18n-kit split`](#split--split-a-monolithic-locale-into-namespaces) to migrate from a flat JSON file to namespace-per-file structure.
-
-### Setup
-
 ```ts
 // vite.config.ts
-import { defineConfig } from 'vite'
-import vue from '@vitejs/plugin-vue'
 import { vueI18nNamespacePlugin } from 'vue-i18n-kit/vite'
 
 export default defineConfig({
   plugins: [
     vue(),
     vueI18nNamespacePlugin({
-      dir: 'src/locales/split',           // scans split/en/, split/ru/, …
+      dir: 'src/locales/split',
       locales: {
         en: { meta: { display: 'English', flag: '🇬🇧' }, eagerNamespaces: ['common'] },
         ru: { meta: { display: 'Русский',  flag: '🇷🇺' }, eagerNamespaces: ['common'] },
@@ -947,55 +842,17 @@ export default defineConfig({
 ### Usage in your app
 
 ```ts
-// main.ts
-import { createApp } from 'vue'
-import { createVueI18nPlugin } from 'vue-i18n-kit'
 import { locales } from 'virtual:vue-i18n-namespaces'
 
-const app = createApp(App)
 app.use(createVueI18nPlugin({ defaultLocale: 'en', locales }))
-app.mount('#app')
-```
-
-The `locales` object has the following shape at runtime:
-
-```ts
-{
-  en: {
-    namespaces: {
-      common:    () => import('src/locales/split/en/common.json'),
-      dashboard: () => import('src/locales/split/en/dashboard.json'),
-      auth:      () => import('src/locales/split/en/auth.json'),
-    },
-    meta: { display: 'English', flag: '🇬🇧' },
-    eagerNamespaces: ['common'],  // loaded immediately on locale switch
-  },
-  ru: { … },
-}
 ```
 
 Namespaces not in `eagerNamespaces` are loaded lazily with `useNamespace()`:
 
 ```ts
-// DashboardLayout.vue
-import { useNamespace } from 'vue-i18n-kit'
-
-const { isLoading, isLoaded } = useNamespace('dashboard')
-// or load several at once:
+const { isLoading } = useNamespace('dashboard')
+// or several at once:
 const { isLoading } = useNamespace(['dashboard', 'charts'])
-```
-
-`useNamespace` re-loads the requested namespaces whenever the active locale changes, and is SSR-safe.
-
-### TypeScript — virtual module type declaration
-
-Add to `env.d.ts` or `vite-env.d.ts`:
-
-```ts
-declare module 'virtual:vue-i18n-namespaces' {
-  import type { LocaleEntry } from 'vue-i18n-kit'
-  export const locales: Record<string, LocaleEntry>
-}
 ```
 
 ### Options
@@ -1005,27 +862,18 @@ declare module 'virtual:vue-i18n-namespaces' {
 | `dir` | `string` | `'src/locales/split'` | Directory containing locale subdirectories (`<dir>/<locale>/<namespace>.json`). |
 | `locales` | `Record<string, { meta?, eagerNamespaces? }>` | `{}` | Per-locale config. Locales found in the directory but not listed here are included automatically. |
 
-| `locales[code].meta` | `Record<string, unknown>` | — | Arbitrary metadata forwarded to `LocaleDefinition.meta`. |
-| `locales[code].eagerNamespaces` | `string[]` | `undefined` | Namespaces to load immediately when the locale is activated. Omit to load all eagerly. Pass `[]` for fully lazy loading. |
-
-### HMR
-
-When any namespace JSON file inside `dir` changes, Vite invalidates and reloads the virtual module automatically — no manual restart needed.
+HMR: when any namespace JSON file inside `dir` changes, Vite invalidates and reloads the virtual module automatically.
 
 ---
 
-## Vite Plugin — In-Context Translation Editor (dev only)
+## Vite plugin — In-context translation editor (dev only)
 
-`vueI18nDevPlugin` injects a floating editor overlay into your running application during development. Translated strings can be wrapped with the `<I18nInspect>` component to show a pencil icon on hover; clicking it opens an inline popup for editing that key — changes are saved immediately via the `vue-i18n-kit ui` server and picked up by Vite HMR.
+`vueI18nDevPlugin` injects a floating editor overlay into your running application during development. Translated strings can be wrapped with the `<I18nInspect>` component to show a pencil icon on hover; clicking it opens an inline popup for editing that key.
 
-**The plugin is a complete no-op during production builds.** Nothing is added to your bundle.
-
-### Setup
+**The plugin is a complete no-op during production builds.**
 
 ```ts
 // vite.config.ts
-import { defineConfig } from 'vite'
-import vue from '@vitejs/plugin-vue'
 import { vueI18nDevPlugin } from 'vue-i18n-kit/vite'
 
 export default defineConfig({
@@ -1042,35 +890,9 @@ Start both servers with one command:
 npx vue-i18n-kit dev
 ```
 
-This auto-detects `scripts.dev` from `package.json`, starts both Vite and the locale editor UI in parallel, and passes `I18N_KIT_UI_URL` to `vueI18nDevPlugin` automatically — no manual `uiUrl` needed.
+This auto-detects `scripts.dev` from `package.json`, starts both Vite and the locale editor UI in parallel, and passes `I18N_KIT_UI_URL` to `vueI18nDevPlugin` automatically.
 
-```bash
-# Custom port or framework:
-vue-i18n-kit dev --ui-port 5173
-vue-i18n-kit dev --app-cmd "nuxt dev"
-
-# Or keep the manual approach if you prefer:
-# package.json
-"i18n:dev": "concurrently \"vite\" \"vue-i18n-kit ui\""
-```
-
-### Register `I18nInspect` globally
-
-`vueI18nDevPlugin` exposes the component on `window.__I18N_KIT_INSPECT_COMPONENT__`. Register it in your app entry so it's available in every template:
-
-```ts
-// main.ts
-const app = createApp(App)
-
-if (import.meta.env.DEV && window.__I18N_KIT_INSPECT_COMPONENT__) {
-  app.component('I18nInspect', window.__I18N_KIT_INSPECT_COMPONENT__)
-}
-
-app.use(/* your i18n plugin */)
-app.mount('#app')
-```
-
-### Auto-wrap — zero-markup mode (default)
+### Auto-wrap (default)
 
 By default `vueI18nDevPlugin` automatically rewrites Vue SFC templates at dev time. Every `{{ t('key') }}`, `{{ tm('key') }}`, and `{{ $t('key') }}` interpolation is wrapped with `<I18nInspect>` — **no manual markup needed**.
 
@@ -1078,160 +900,37 @@ By default `vueI18nDevPlugin` automatically rewrites Vue SFC templates at dev ti
 <!-- Source as written -->
 <template>
   <p>{{ t('nav.home') }}</p>
-  <h1>{{ tm('hero.title') }}</h1>
 </template>
 
 <!-- What Vite actually compiles in dev mode -->
 <template>
   <p><I18nInspect i18n-key="nav.home">{{ t('nav.home') }}</I18nInspect></p>
-  <h1><I18nInspect i18n-key="hero.title">{{ tm('hero.title') }}</I18nInspect></h1>
 </template>
 ```
 
-**Auto-wrap rules:**
-- Only `{{ }}` interpolations — element attributes (`:placeholder="t('key')"`) are never touched.
-- Only **literal string keys** — dynamic expressions like `{{ t(dynamicKey) }}` are skipped.
-- Template literals containing `${}` are skipped (treated as dynamic).
-- Already-wrapped calls are not double-wrapped — files with explicit `<I18nInspect>` markup are safe.
-
-**Opt out** by setting `autoWrap: false`:
-```ts
-vueI18nDevPlugin({ autoWrap: false })
-```
-Then register `I18nInspect` manually (see below) and wrap strings explicitly.
-
-**Custom function names:**
-```ts
-vueI18nDevPlugin({
-  wrapFunctions: ['t', '$t', 'tm', 'i18n.global.t'],
-})
-```
-
-### Marking strings for in-context editing (explicit mode)
-
-When `autoWrap: false`, wrap translated strings manually with `<I18nInspect i18n-key="…">`:
-
-```vue
-<template>
-  <!-- Single key -->
-  <I18nInspect i18n-key="nav.home">{{ t('nav.home') }}</I18nInspect>
-
-  <!-- With explicit locale (e.g. always edit the Russian translation) -->
-  <I18nInspect i18n-key="nav.home" locale="ru">{{ t('nav.home') }}</I18nInspect>
-
-  <!-- Works inside any element -->
-  <h1>
-    <I18nInspect i18n-key="hero.title">{{ t('hero.title') }}</I18nInspect>
-  </h1>
-</template>
-```
-
-**Visual behaviour — `I18nInspect`:**
-
-- On hover a dashed purple outline appears around the wrapped text.
-- A small purple pencil button (✏) fades in at the top-right corner of the element.
-- Clicking the button opens the `DevOverlay` editor popup.
-- All styles use the `__ik-` CSS prefix — they cannot conflict with host-app styles.
+Set `autoWrap: false` to use explicit `<I18nInspect i18n-key="…">` markup or the `v-i18n-inspect` directive instead.
 
 ### Dynamic keys — `v-i18n-inspect` directive
 
-`autoWrap` and `<I18nInspect>` only work with **literal string keys** — the key must be known at build time.  
-For **runtime keys** (variables, computed values, loop indices) use the `v-i18n-inspect` directive instead:
+For runtime keys (variables, computed values, loop indices) use the directive which attaches hover behaviour to the existing element without adding a wrapper node:
 
 ```vue
-<template>
-  <!-- Variable key -->
-  <span v-i18n-inspect="activeKey">{{ t(activeKey) }}</span>
-
-  <!-- Computed / concatenated key -->
-  <span v-i18n-inspect="`items.${item.id}`">{{ t(`items.${item.id}`) }}</span>
-
-  <!-- v-for with dynamic keys -->
-  <li
-    v-for="section in sections"
-    :key="section.id"
-    v-i18n-inspect="'sections.' + section.id"
-  >
-    {{ t('sections.' + section.id) }}
-  </li>
-</template>
+<span v-i18n-inspect="activeKey">{{ t(activeKey) }}</span>
+<span v-i18n-inspect="`items.${item.id}`">{{ t(`items.${item.id}`) }}</span>
 ```
-
-**Why a directive instead of a component?**  
-The directive attaches hover behaviour to the **existing** element without adding a wrapper node.  
-This preserves CSS selectors that rely on `:first-child`, `:last-child`, flex/grid direct-child rules, etc.
-
-**Visual behaviour** is identical to `I18nInspect`:
-
-- Hover → dashed purple outline + pencil button.
-- Click → opens the `DevOverlay` editor popup with the current value of `v-i18n-inspect`.
-- Key updates reactively: if the binding value changes, the directive tracks the new key automatically.
-
-**Register the directive** in `main.ts` alongside `I18nInspect`:
-
-```ts
-// main.ts
-async function initializeApp() {
-  const app = createApp(App)
-
-  // ... app.use(...)
-
-  if (import.meta.env.DEV && window.__I18N_KIT_INSPECT_COMPONENT__) {
-    app.component('I18nInspect', window.__I18N_KIT_INSPECT_COMPONENT__)
-  }
-  if (import.meta.env.DEV && window.__I18N_KIT_INSPECT_DIRECTIVE__) {
-    app.directive('i18n-inspect', window.__I18N_KIT_INSPECT_DIRECTIVE__)
-  }
-
-  app.mount('#app')
-}
-```
-
-> **Production safety** — the directive is never registered in production builds.  
-> Vue silently ignores unknown directives, so leaving `v-i18n-inspect` attributes in templates causes no warnings and adds nothing to the bundle.
-
-### Editor popup (`DevOverlay`)
-
-When the pencil is clicked, a centered modal appears:
-
-1. Loads current values for **all** registered locales from the `vue-i18n-kit ui` server.
-2. Shows a labelled textarea for each locale, pre-filled with the existing translation.
-3. A dot (`●`) marks locales with unsaved changes.
-4. **Save** (`Ctrl+Enter` / `⌘+Enter`) sends `PUT /api/locale/:code` for each changed locale.
-5. The server writes the updated JSON to disk — Vite's file watcher picks up the change and triggers HMR automatically.
-6. After a brief success flash the popup closes.
-
-The header contains two action buttons:
-
-- **⬛ Open in editor panel** — opens the full `vue-i18n-kit ui` in a right-side iframe panel overlaid on top of your application. The mini popup closes automatically so you can still hover over other translations in the app behind the panel.
-- **✕ / ↗** — inside the iframe bar: **Close** collapses the panel, **↗ Open in new tab** opens the same URL in a new browser tab and closes the panel.
-
-**Keyboard shortcuts:**
-
-| Key | Action |
-|---|---|
-| `Escape` | Close popup (if open), or collapse iframe panel |
-| `Ctrl+Enter` / `⌘+Enter` | Save all changed locales |
-
-### `I18nInspect` props
-
-| Prop | Type | Required | Description |
-|---|---|---|---|
-| `i18n-key` | `string` | ✓ | The translation key passed to `t()`. Shown in the editor and used as the lookup key when saving. |
-| `locale` | `string` | — | Override the locale to edit. Defaults to the currently active locale. |
 
 ### Options
 
 | Option | Type | Default | Description |
 |---|---|---|---|
-| `uiUrl` | `string` | `I18N_KIT_UI_URL` env or `'http://localhost:4173'` | URL of the running `vue-i18n-kit ui` server. Set automatically when using `vue-i18n-kit dev`. |
-| `autoWrap` | `boolean` | `true` | Automatically wrap `t()` / `tm()` / `$t()` interpolations with `<I18nInspect>` at dev time. Set to `false` to use explicit markup only. |
+| `uiUrl` | `string` | `I18N_KIT_UI_URL` env or `'http://localhost:4173'` | URL of the running `vue-i18n-kit ui` server. |
+| `autoWrap` | `boolean` | `true` | Automatically wrap `t()` / `tm()` / `$t()` interpolations with `<I18nInspect>` at dev time. |
 | `wrapFunctions` | `string[]` | `['t', 'tm', '$t']` | Function names to look for when `autoWrap` is enabled. |
-| `iframeWidth` | `string` | `'480px'` | Width of the right-side iframe editor panel. Accepts any CSS width value (`'600px'`, `'40vw'`, etc.). |
+| `iframeWidth` | `string` | `'480px'` | Width of the right-side iframe editor panel. |
 
 ---
 
-## CLI — Locale File Management
+## CLI — Locale file management
 
 The `vue-i18n-kit` CLI helps scaffold and audit locale JSON files.
 
@@ -1258,32 +957,11 @@ vue-i18n-kit init
 3. Prompts for the locales directory and toolkit directory paths.
 4. Detects `vite.config.ts` / `nuxt.config.ts` and optionally adds `vueI18nMapPlugin` automatically.
 5. Handles existing locale JSON files — keep, overwrite, or copy structure from another locale.
-6. Detects the app entry file (`src/main.ts` etc.) and checks whether `createVueI18nPlugin` is already wired up.
-   If not, asks whether to print the ready-to-paste `app.use()` snippet.
-7. Writes `i18n-kit.config.json`, `i18n-tools/locales.config.json`, locale JSON stubs.
+6. Writes `i18n-kit.config.json`, `i18n-tools/locales.config.json`, locale JSON stubs.
 
-**What it does NOT do:**
+Running `vue-i18n-kit init` on an existing project offers three choices: use the current config as-is, update settings, or reinitialize from scratch.
 
-- Modify `main.ts` (or any other app entry file). The plugin registration (`app.use(createVueI18nPlugin({...}))`) must be added manually — see [Register the plugin](#2-register-the-plugin) above.
-
-Running `vue-i18n-kit init` on an existing project offers three choices: use the current config as-is, update settings (wizard pre-filled with current values), or reinitialize from scratch.
-
-#### i18n Ally integration
-
-The wizard offers an optional step to generate `.vscode/settings.json` with [i18n Ally](https://marketplace.visualstudio.com/items?itemName=lokalise.i18n-ally) settings. Selecting yes produces:
-
-```json
-// .vscode/settings.json (merged with any existing content)
-{
-  "i18n-ally.locales": ["en", "ru"],
-  "i18n-ally.pathMatcher": "src/locales/{locale}.json",
-  "i18n-ally.sourceLanguage": "en",
-  "i18n-ally.enabledParsers": ["json"],
-  "i18n-ally.keystyle": "nested"
-}
-```
-
-This enables in-editor inline translation previews, missing-key highlighting, and i18n Ally's translation helper panel — all reading from the same locale files.
+**i18n Ally integration** — the wizard optionally generates `.vscode/settings.json` for [i18n Ally](https://marketplace.visualstudio.com/items?itemName=lokalise.i18n-ally) with inline translation previews and missing-key highlighting.
 
 ---
 
@@ -1292,13 +970,8 @@ This enables in-editor inline translation previews, missing-key highlighting, an
 Copies the structure of an existing locale file into a new one.
 
 ```bash
-# Copy 'en' structure into 'fr.json', keeping values as placeholders
 vue-i18n-kit add fr
-
-# Same, but write empty strings instead of source values
 vue-i18n-kit add fr --from en --empty
-
-# Custom directory
 vue-i18n-kit add de --dir src/i18n --from en --empty
 ```
 
@@ -1307,6 +980,8 @@ vue-i18n-kit add de --dir src/i18n --from en --empty
 | `--dir <path>` | `src/locales` | Locales directory. |
 | `--from <locale>` | first file in dir | Source locale to copy structure from. |
 | `--empty` | `false` | Write empty strings instead of copying source values. |
+
+---
 
 ### `check` — Audit translation completeness
 
@@ -1333,16 +1008,15 @@ vue-i18n-kit check --default en --fail
   run: npx vue-i18n-kit check --default en --fail
 ```
 
+---
+
 ### `merge` — Merge a shared dictionary
 
 Deep-merges a base or corporate JSON dictionary into project locale files. Only adds missing keys by default — existing translations are left untouched unless `--overwrite` is passed.
 
 ```bash
-# Add all missing keys from a shared base (dry run first)
 vue-i18n-kit merge shared/base.json --dry
 vue-i18n-kit merge shared/base.json
-
-# Merge into a single locale only, overwriting existing values
 vue-i18n-kit merge updates.json --locale ru --overwrite
 ```
 
@@ -1356,22 +1030,15 @@ vue-i18n-kit merge updates.json --locale ru --overwrite
 
 > Keys listed in `ignore.prune` and `locked` in `i18n-kit.config.json` are never overwritten — even with `--overwrite`.
 
-**Use case — corporate shared dictionary:**
-
-Maintain a `shared/base.json` in a monorepo or npm package and run `merge` after pulling to keep all project locales up to date with company-wide terms.
+---
 
 ### `prune` — Remove unused keys
 
-Scans source files for `t()`, `tm()`, `$t()` calls and removes any locale keys not referenced anywhere in the project. Useful before a release to keep JSON files lean.
+Scans source files for `t()`, `tm()`, `$t()` calls and removes any locale keys not referenced anywhere in the project.
 
 ```bash
-# Preview what would be removed
 vue-i18n-kit prune --dry
-
-# Apply (will scan source files first)
 vue-i18n-kit prune
-
-# Use a pre-built entries file (skips scanning, faster in CI)
 vue-i18n-kit prune --entries i18n-tools/locales.entries.json
 ```
 
@@ -1383,19 +1050,16 @@ vue-i18n-kit prune --entries i18n-tools/locales.entries.json
 | `--yes` | `false` | Skip confirmation prompt. |
 | `--ignore <patterns>` | _(none)_ | Comma-separated key patterns to never remove (e.g. `"status.*,legacy.*"`). |
 
-Keys listed in `ignore.prune` from `i18n-kit.config.json` are automatically included — no flag needed. Keys declared as `locked` in the base config are also protected.
-
 > **Tip:** Run `prune --dry` in CI and fail the build if output is non-empty to enforce a "no dead keys" policy.
+
+---
 
 ### `types` — Generate TypeScript types
 
 Generates a `TranslationKey` union type from a reference locale file. Gives you autocomplete and compile-time key checking when calling `t()`.
 
 ```bash
-# Generate src/i18n.d.ts (default output)
 vue-i18n-kit types
-
-# Custom output path, specific locale, watch mode
 vue-i18n-kit types --out src/types/i18n.d.ts --locale en --watch
 ```
 
@@ -1417,9 +1081,6 @@ export type TranslationKey =
   | 'greeting'
   | 'items'
 
-export type TranslationKeyPrefix =
-  | 'buttons'
-
 declare module 'vue-i18n-kit' {
   interface Register {
     key: TranslationKey
@@ -1427,9 +1088,19 @@ declare module 'vue-i18n-kit' {
 }
 ```
 
-### `split` — Split flat JSON into namespace files
+With the `Register` augmentation the compiler will error on unknown keys:
 
-Splits each `{locale}.json` into per-namespace files: `{locale}/{namespace}.json`. The top-level key in the source JSON becomes the namespace name.
+```ts
+const { t } = useT()
+t('buttons.submit')   // ✓
+t('buttons.submitt')  // ✗ TypeScript error
+```
+
+---
+
+### `split` — Split a monolithic locale into namespaces
+
+Splits each `{locale}.json` into per-namespace files: `{locale}/{namespace}.json`.
 
 ```bash
 vue-i18n-kit split
@@ -1442,18 +1113,6 @@ vue-i18n-kit split --dir src/locales --out src/locales/split --dry
 | `--out <path>` | `<dir>/split` | Output directory. |
 | `--dry` | `false` | Preview without writing files. |
 
-After splitting, each locale produces a subdirectory:
-```
-src/locales/split/
-├── en/
-│   ├── auth.json
-│   ├── dashboard.json
-│   └── buttons.json
-└── ru/
-    ├── auth.json
-    └── ...
-```
-
 ---
 
 ### `merge-ns` — Merge namespace files back into flat JSON
@@ -1465,13 +1124,6 @@ vue-i18n-kit merge-ns
 vue-i18n-kit merge-ns --dir src/locales/split --out src/locales --dry
 ```
 
-| Flag | Default | Description |
-|---|---|---|
-| `--dir <path>` | `<localesDir>/split` | Namespace directory. |
-| `--out <path>` | `localesDir` from config | Output directory for merged files. |
-| `--dry` | `false` | Preview without writing files. |
-| `--no-sort` | `false` | Skip alphabetical key sort. |
-
 ---
 
 ### `stale` — Show outdated translations
@@ -1479,141 +1131,6 @@ vue-i18n-kit merge-ns --dir src/locales/split --out src/locales --dry
 Reports keys whose reference locale value has changed since the translation was last reviewed. Requires `staleTracking: true` in `i18n-kit.config.json`.
 
 ```bash
-vue-i18n-kit stale
-vue-i18n-kit stale --locale en --dir src/locales
-```
-
-| Flag | Default | Description |
-|---|---|---|
-| `--dir <path>` | `src/locales` | Locales directory. |
-| `--locale <code>` | first in config | Reference locale. |
-
-**How it works:** When a value in the reference locale is saved via the UI, its SHA1 hash is stored in `i18n-kit.notes.json` under `_hash.<key>`. On the next `stale` run (or editor load), the stored hash is compared to the current value — a mismatch means the source text changed and the translation may be outdated.
-
-Enable tracking in config:
-
-```json
-{
-  "staleTracking": true
-}
-```
-
-### `export` — Export for translators (XLIFF / PO)
-
-Exports a locale to XLIFF 1.2 or Gettext PO format, ready to send to a professional translation agency or CAT tool. The reference locale values are exported as `<source>` / `msgid`; the target locale as `<target>` / `msgstr`. Translator notes from the editor are included.
-
-```bash
-# Export Russian locale to XLIFF (default)
-vue-i18n-kit export --locale ru
-
-# Export to PO format, custom output path
-vue-i18n-kit export --locale ru --format po --out translations/ru.po
-
-# Use a different reference locale
-vue-i18n-kit export --locale ru --format xliff --ref en
-```
-
-| Flag | Default | Description |
-|---|---|---|
-| `--locale <code>` | — | **Required.** Locale to export. |
-| `--format <xliff\|po>` | `xliff` | Output format. |
-| `--out <path>` | `<locale>.<format>` | Output file path. |
-| `--dir <path>` | `src/locales` | Locales directory. |
-| `--ref <code>` | first in config | Reference locale (source language). |
-
-### `import` — Import from XLIFF / PO
-
-Reads a completed XLIFF or PO file from a translator and writes the translated values back into the locale JSON file.
-
-```bash
-vue-i18n-kit import ru.xliff
-vue-i18n-kit import translations/ru.po --dir src/locales
-
-# Preview without writing
-vue-i18n-kit import ru.po --dry
-```
-
-| Flag | Default | Description |
-|---|---|---|
-| `--dir <path>` | `src/locales` | Locales directory. |
-| `--dry` | `false` | Preview changes without writing files. |
-
-The target locale code is read from the file itself (`target-language` attribute in XLIFF, `Language:` header in PO). The output file is sorted alphabetically and existing keys not present in the import file are left untouched.
-
----
-
-## TypeScript Type Generation
-
-The `types` command integrates into your development workflow to catch translation key typos at compile time.
-
-### Usage in components
-
-After running `vue-i18n-kit types`, the generated `TranslationKey` type is automatically available if you have a `Register` augmentation:
-
-```ts
-// This is already in the generated src/i18n.d.ts:
-declare module 'vue-i18n-kit' {
-  interface Register { key: TranslationKey }
-}
-```
-
-With `vue-i18n-kit`'s typed API the compiler will error on unknown keys:
-
-```ts
-const { t } = useT()
-t('buttons.submit')   // ✓
-t('buttons.submitt')  // ✗ TypeScript error: Argument of type '"buttons.submitt"' is not assignable...
-```
-
-### Keeping types in sync
-
-Add the `types` command to your development scripts:
-
-```json
-{
-  "scripts": {
-    "i18n:types": "vue-i18n-kit types --watch",
-    "i18n:ui": "vue-i18n-kit auto-config && vue-i18n-kit ui"
-  }
-}
-```
-
-Or run it once as a pre-build step:
-
-```json
-{
-  "scripts": {
-    "prebuild": "vue-i18n-kit types"
-  }
-}
-```
-
----
-
-## Stale Translation Detection
-
-When `staleTracking: true` is set, the editor tracks changes to the reference locale and marks translations in other locales as potentially outdated.
-
-```json
-// i18n-kit.config.json
-{
-  "staleTracking": true
-}
-```
-
-### How stale detection works
-
-1. When you save a value in the reference locale via the editor, a SHA1 hash of the new value is stored in `i18n-kit.notes.json` under `_hash.<key>`.
-2. On the next load the editor compares every reference value to its stored hash.
-3. Keys with a mismatched hash appear with an `⚠ outdated` badge in the editor.
-4. A dedicated `stale` filter button lets you view only outdated keys.
-5. The detail panel for a stale key shows the current reference text.
-6. Clicking **Mark as reviewed** resets the hash for the selected keys — use this after updating all translations.
-
-### CLI
-
-```bash
-# List all stale keys to the console
 vue-i18n-kit stale
 ```
 
@@ -1627,51 +1144,50 @@ Stale keys (reference locale changed since last review):
 
 ---
 
-## XLIFF / PO Export & Import
+### `export` — Export for translators (XLIFF / PO)
 
-Industry-standard translation file formats — compatible with Phrase, Lokalise, Weblate, OmegaT, Poedit, and most CAT tools.
-
-### Export workflow
+Exports a locale to XLIFF 1.2 or Gettext PO format, ready to send to a professional translation agency or CAT tool.
 
 ```bash
-# 1. Export the locale for a translator
-vue-i18n-kit export --locale ru --format xliff --out send-to-translator/ru.xliff
-
-# or PO for Poedit / Weblate
-vue-i18n-kit export --locale ru --format po --out send-to-translator/ru.po
+vue-i18n-kit export --locale ru
+vue-i18n-kit export --locale ru --format po --out translations/ru.po
+vue-i18n-kit export --locale ru --format xliff --ref en
 ```
 
-The XLIFF file includes `<source>` (reference text) and `<target>` (current translation). Translator notes from the editor appear as `<note>` elements.
-
-The PO file uses `msgctxt` for the key name, `msgid` for the source text, and `msgstr` for the translation. Notes appear as `#.` comments.
-
-### Import workflow
-
-```bash
-# 2. After the translator returns the file, import it
-vue-i18n-kit import send-to-translator/ru.xliff
-
-# Preview first
-vue-i18n-kit import ru.po --dry
-```
-
-The locale code is read from the file header — no flag needed. Only keys present in the import file are updated; unrelated keys are left untouched.
-
-### UI integration
-
-The locale editor header has **Export XLIFF** and **Export PO** buttons that open a locale-picker dialog. The **Import** button (next to Import CSV) accepts both XLIFF and PO files.
+| Flag | Default | Description |
+|---|---|---|
+| `--locale <code>` | — | **Required.** Locale to export. |
+| `--format <xliff\|po>` | `xliff` | Output format. |
+| `--out <path>` | `<locale>.<format>` | Output file path. |
+| `--dir <path>` | `src/locales` | Locales directory. |
+| `--ref <code>` | first in config | Reference locale (source language). |
 
 ---
 
-## Coverage Report (`vue-i18n-kit stats`)
+### `import` — Import from XLIFF / PO
+
+Reads a completed XLIFF or PO file from a translator and writes the translated values back into the locale JSON file.
+
+```bash
+vue-i18n-kit import ru.xliff
+vue-i18n-kit import translations/ru.po --dry
+```
+
+The target locale code is read from the file itself. Only keys present in the import file are updated; unrelated keys are left untouched.
+
+---
+
+## Coverage report (`vue-i18n-kit stats`)
 
 Get a quick snapshot of translation completeness without opening the editor.
 
-### Console output (default)
-
 ```bash
 vue-i18n-kit stats
+vue-i18n-kit stats --format json --out ci-report.json
+vue-i18n-kit stats --format html
 ```
+
+**Console output:**
 
 ```
   vue-i18n-kit stats  2026-04-11
@@ -1681,62 +1197,20 @@ vue-i18n-kit stats
   🇬🇧 English (en)    ████████████████████  100%
   🇷🇺 Русский (ru)    ████████████████░░░░   89%  4 missing
   🇩🇪 Deutsch (de)    ███████████████░░░░░   77%  8 missing
-
-  By namespace
-  namespace    keys    en      ru      de
-  auth           12    100%    100%    92%
-  dashboard      10    100%    0%      0%
-  errors          8    100%    100%    75%
-
-  Issues
-  • 12 missing
-  • 2 phantom (used in code, absent from files)
 ```
 
-### JSON output — CI pipelines
-
-```bash
-vue-i18n-kit stats --format json --out ci-report.json
-```
-
-```json
-{
-  "generated": "2026-04-11T10:00:00.000Z",
-  "totalKeys": 35,
-  "locales": [
-    { "code": "en", "display": "English", "total": 35, "filled": 35, "empty": 0, "missing": 0, "coverage": 100, "bytes": 2048 },
-    { "code": "ru", "display": "Русский", "total": 35, "filled": 31, "empty": 0, "missing": 4,  "coverage": 89,  "bytes": 1820 }
-  ],
-  "namespaces": [
-    { "name": "auth", "keys": 12, "bytes": 640, "byLocale": { "en": 100, "ru": 100, "de": 92 } }
-  ],
-  "phantom": 2,
-  "unused": 3
-}
-```
-
-#### GitHub Actions example
+**GitHub Actions example:**
 
 ```yaml
 - name: Check i18n coverage
   run: |
     npx vue-i18n-kit stats --format json --out coverage.json
-    # Fail if any locale is below 80%
     node -e "
       const r = require('./coverage.json');
       const low = r.locales.filter(l => l.coverage < 80);
       if (low.length) { console.error('Low coverage:', low.map(l => l.code + ' ' + l.coverage + '%')); process.exit(1); }
     "
 ```
-
-### HTML report
-
-```bash
-vue-i18n-kit stats --format html
-# Opens i18n-stats.html — a self-contained dark-theme report with progress bars
-```
-
-### Options
 
 | Option | Description |
 |---|---|
@@ -1748,38 +1222,50 @@ vue-i18n-kit stats --format html
 
 ---
 
-## Machine Translation
+## Stale translation detection
+
+When `staleTracking: true` is set, the editor tracks changes to the reference locale and marks translations in other locales as potentially outdated.
+
+```json
+// i18n-kit.config.json
+{
+  "staleTracking": true
+}
+```
+
+**How it works:**
+
+1. When you save a value in the reference locale via the editor, a SHA1 hash is stored in `i18n-kit.notes.json` under `_hash.<key>`.
+2. On the next load the editor compares every reference value to its stored hash.
+3. Keys with a mismatched hash appear with an `⚠ outdated` badge in the editor.
+4. A dedicated `stale` filter shows only outdated keys.
+5. Clicking **Mark as reviewed** resets the hash — use this after updating all translations.
+
+---
+
+## XLIFF / PO export & import
+
+Industry-standard translation file formats — compatible with Phrase, Lokalise, Weblate, OmegaT, Poedit, and most CAT tools.
+
+The XLIFF file includes `<source>` (reference text) and `<target>` (current translation). Translator notes from the editor appear as `<note>` elements. The PO file uses `msgctxt` for the key name, `msgid` for the source text, and `msgstr` for the translation.
+
+The locale editor header has **Export XLIFF**, **Export PO**, and **Import** buttons that open locale-picker dialogs.
+
+---
+
+## Machine translation
 
 The editor can auto-translate all missing keys with one click. Two engines are supported — choose in **Settings → Translation engine**.
 
 ### LibreTranslate
 
-An open-source, self-hostable translation API. The public instance at `https://libretranslate.com` is free for low traffic; for production use, self-host or buy an API key.
-
-**Settings:**
-- **URL** — your LibreTranslate instance (default: `https://libretranslate.com`)
-- **API key** — optional; required on the public instance for sustained usage
+An open-source, self-hostable translation API. The public instance at `https://libretranslate.com` is free for low traffic.
 
 ### DeepL
 
-Significantly higher translation quality than LibreTranslate. The free plan covers **500,000 characters/month**.
+Higher translation quality. The free plan covers **500,000 characters/month** — sign up at [deepl.com/pro](https://www.deepl.com/pro) for **DeepL API Free**.
 
-**Getting a key:**
-1. Sign up at [deepl.com/pro](https://www.deepl.com/pro) — choose **DeepL API Free**
-2. Go to your account → **API Keys** → copy the key (ends with `:fx`)
-3. Paste it into **Settings → DeepL Auth Key** in the editor
-
-**Settings:**
-- **Auth Key** — keys ending in `:fx` use the free-tier endpoint `api-free.deepl.com` automatically; Pro keys use `api.deepl.com`
-- **Formality** — controls the register of the translated text; supported for DE, FR, IT, ES, NL, PL, PT-PT, PT-BR, JA, RU:
-
-  | Value | Meaning |
-  |---|---|
-  | `default` | Engine chooses (default) |
-  | `more` | Formal / polite register |
-  | `less` | Informal register |
-  | `prefer_more` | Formal if supported, otherwise default |
-  | `prefer_less` | Informal if supported, otherwise default |
+Keys ending in `:fx` use the free-tier endpoint `api-free.deepl.com` automatically.
 
 ### Placeholder handling
 
@@ -1787,41 +1273,53 @@ Both engines receive strings with `{variable}` and ICU plural blocks (`{count, p
 
 ---
 
-## Locale Editor UI
+## Locale editor UI
 
 A browser-based editor for viewing and editing locale files directly in your project — no external service, runs entirely on your machine.
 
-### What it does
+### Setup
 
-#### Dashboard
+```json
+// package.json
+"i18n:ui": "vue-i18n-kit auto-config && vue-i18n-kit ui"
+```
+
+```bash
+npm run i18n:ui
+```
+
+The editor opens at `http://localhost:4173`. `auto-config` reads your `createVueI18nPlugin(...)` call as the **single source of truth** — only the locales explicitly registered there are included.
+
+Or start everything together (Vite + editor):
+
+```bash
+vue-i18n-kit dev
+```
+
+### Dashboard
 
 - **Coverage overview** — overall coverage bar, per-locale progress with missing key count
-- **Namespace cards** — coverage percentage per namespace; click any card to jump straight to that namespace in the editor
+- **Namespace cards** — coverage percentage per namespace
 - **Unused keys** — keys with no `t()`/`tm()`/`$t()` usages found in source files
-- **Phantom keys** — keys referenced in code via `t()` but absent from all locale files; highlighted in red so they are hard to miss
+- **Phantom keys** — keys referenced in code but absent from all locale files; highlighted in red
 - **Duplicate values** — keys where all locales share the same non-empty value (likely untranslated)
 
-#### Editor table
+### Editor table
 
-- **Inline editing** — click any cell to edit in place; input immediately receives focus; multiline textarea auto-resizes; save with Enter or ✓, cancel with Escape or ✕; changes are written immediately to locale JSON on disk
-- **Namespace groups** — keys grouped by dotted prefix (`auth.form.label` → group `auth` → sub-group `form` → key `label`); groups collapse/expand; arbitrary nesting depth is supported
-- **Group operations** — on any group row: add a nested sub-group, add a key, rename the namespace (renames all keys), delete the group and all its keys
-- **Empty groups** — create a group without any keys first; the group persists in the UI until a key is added or the page reloads
-- **Inline key actions** — rename, duplicate, add/edit note, delete — appear next to the key label on hover
+- **Inline editing** — click any cell to edit in place; save with Enter or ✓, cancel with Escape
+- **Namespace groups** — keys grouped by dotted prefix; groups collapse/expand; arbitrary nesting depth
+- **Group operations** — add sub-group, add key, rename namespace, delete group
+- **Inline key actions** — rename, duplicate, add/edit note, delete
 - **Batch select & delete** — row checkboxes + bulk delete bar
 - **Usage map** — expand any key row to see which source files reference it; clickable file chips open the file in your IDE (VS Code, Cursor, WebStorm, PhpStorm, IntelliJ)
-- **Cell validation** — inline warnings for: placeholder mismatch `{var}`, HTML tag mismatch, ICU syntax errors (unbalanced braces, missing `other {}`), length > 2.5× reference
-- **Translation memory** — when editing a non-reference locale cell, previously saved translations for similar source strings are shown as one-click suggestion chips. The memory is saved to `i18n-kit.memory.json` and can be cleared or exported from Settings. Disable with `memory: { enabled: false }` in config.
-- **Namespace filter bar** — when `namespaces: true` is set in `i18n-kit.config.json`, a pill bar above the table lets you filter to a single namespace with one click.
-- **Empty vs missing** — visual distinction between a key that is absent (`— missing —`) and one intentionally set to an empty string (`— empty —`)
-- **Duplicate badge** — `dup` badge on keys where all locales have identical non-empty values
-- **Copy from reference** — one-click button on missing/empty cells to copy the value from the reference locale
+- **Cell validation** — inline warnings for placeholder mismatch, HTML tag mismatch, ICU syntax errors, length > 2.5× reference
+- **Translation memory** — previously saved translations for similar source strings are shown as one-click suggestion chips
+- **Plural preview** — for ICU keys, shows rendered forms for `n = 0, 1, 2, 5, 11, 21` across all locales
 - **Interpolation preview** — expand a key row to fill in `{variable}` values and see the rendered output per locale
-- **Plural preview** — for keys with ICU plural format (`{count, plural, one{...} other{...}}`), the detail panel shows a table of rendered forms for `n = 0, 1, 2, 5, 11, 21` across all locales
-- **Density toggle** — compact / default / relaxed row height
 - **Keyboard navigation** — arrow keys move between cells; Enter starts editing; Space toggles selection
+- **Live reload** — when a locale file changes on disk, the affected locale reloads automatically via SSE
 
-#### Toolbar & header
+### Toolbar & header
 
 | Feature | Shortcut | Description |
 |---|---|---|
@@ -1830,176 +1328,34 @@ A browser-based editor for viewing and editing locale files directly in your pro
 | Undo | `Ctrl+Z` | Undo the last saved change (up to 100 steps) |
 | Export CSV | — | Download all translations as a CSV file |
 | Import CSV | — | Upload a CSV; preview diff before applying |
-| Export XLIFF | — | Export a locale to XLIFF 1.2 format for CAT tools |
-| Export PO | — | Export a locale to Gettext PO format for Poedit / Weblate |
-| Import XLIFF/PO | — | Import completed XLIFF or PO file from a translator |
-| Sort keys | — | Sort all keys alphabetically in every locale file |
-| Add locale | — | Add a new language to the project — creates the JSON file and updates the config |
-| Translate missing | — | Auto-translate missing values via LibreTranslate or DeepL (configured in Settings) |
+| Export XLIFF / PO | — | Export a locale for CAT tools / Poedit / Weblate |
+| Import XLIFF / PO | — | Import completed file from a translator |
+| Translate missing | — | Auto-translate missing values via LibreTranslate or DeepL |
 | Shortcut help | `?` | Show keyboard shortcut cheatsheet |
 
-#### Filter bar
+### Filter bar
 
 | Filter | Description |
 |---|---|
 | `all` / `missing` / `complete` | Show all keys, only keys with missing translations, or only fully translated keys |
 | `unused` | Show only keys not referenced in any source file |
-| `phantom` | Show only keys used in code but absent from all locale files (appears when phantoms exist) |
-| `stale` | Show only keys whose reference value changed since last review (appears when `staleTracking: true` and stale keys exist) |
-
-#### Settings (gear icon)
-
-- **Reference locale** — used as baseline for validation and copy-from-reference; persisted to `localStorage`
-- **IDE scheme** — choose VS Code, Cursor, WebStorm, PhpStorm or IntelliJ for file-chip links
-- **Translation engine** — switch between LibreTranslate and DeepL (toggle button); all settings are stored in `localStorage`
-  - *LibreTranslate*: URL (default `https://libretranslate.com`) + optional API key
-  - *DeepL*: Auth Key (keys ending in `:fx` automatically use the free-tier endpoint `api-free.deepl.com`); optional **Formality** (`more` / `less` / `prefer_more` / `prefer_less`) for supported languages (DE, FR, IT, ES, NL, PL, PT, JA, RU)
-
-#### Live reload
-
-The editor connects to the server via SSE. When a locale file changes on disk (e.g. after a `git pull` or a manual edit), the affected locale reloads automatically in the browser without a full page refresh. A green dot in the header indicates the connection is active.
-
-#### Git status
-
-Locale column headers are highlighted when the corresponding JSON file has uncommitted changes (`git status --porcelain`).
-
-### Setup
-
-**1. Add the script to `package.json`:**
-
-```json
-"i18n:ui": "vue-i18n-kit auto-config && vue-i18n-kit ui"
-```
-
-**2. Run:**
-
-```bash
-npm run i18n:ui
-```
-
-`auto-config` reads your `createVueI18nPlugin(...)` call as the **single source of truth** — only the locales explicitly registered there are included. It generates the data index and configures `vueI18nMapPlugin` automatically. The editor then opens at `http://localhost:4173`.
-
-### `auto-config` — what it does
-
-1. **Reads locale list from `createVueI18nPlugin`** — scans source files for the plugin call and extracts locale codes, file paths (from `import(...)` / `~/...`), and `meta` from each `LocaleDefinition`. Only locales wired up to the app are included.
-2. **Generates `i18n-tools/locales.config.json`** — resolved paths and metadata for each locale.
-3. **Generates `i18n-tools/locales.entries.json`** — map of `{ "key": ["src/file.vue", …] }` built by scanning `t()`, `tm()`, `$t()` calls across the project.
-4. **Updates the project config** — detects `vite.config.ts` or `nuxt.config.ts` and adds or updates `vueI18nMapPlugin` accordingly. Prints copy-paste instructions if neither file is found.
-
-Both generated files can be added to `.gitignore`.
-
-### What gets written to the project config
-
-`auto-config` detects the project type automatically and writes to the correct file.
-
-**`vite.config.ts` (Vue / Vite):**
-
-```ts
-import { vueI18nMapPlugin } from 'vue-i18n-kit/vite'
-
-export default defineConfig({
-  plugins: [
-    vue(),
-    vueI18nMapPlugin({
-      locales: {
-        en: { path: 'src/locales/en.json', meta: { display: 'English', flag: '🇬🇧' } },
-        ru: { path: 'src/locales/ru.json', meta: { display: 'Русский', flag: '🇷🇺' } },
-      },
-    }),
-  ],
-})
-```
-
-**`nuxt.config.ts` (Nuxt):**
-
-```ts
-import { vueI18nMapPlugin } from 'vue-i18n-kit/vite'
-
-export default defineNuxtConfig({
-  vite: {
-    plugins: [
-      vueI18nMapPlugin({
-        locales: {
-          en: { path: 'locales/en.json', meta: { display: 'English', flag: '🇬🇧' } },
-          ru: { path: 'locales/ru.json', meta: { display: 'Русский', flag: '🇷🇺' } },
-        },
-      }),
-    ],
-  },
-})
-```
-
-On subsequent runs `auto-config` replaces the entire `vueI18nMapPlugin(...)` call with fresh data from `createVueI18nPlugin` — `meta` included. Any other config changes are preserved.
-
-### `vue-i18n-kit dev`
-
-Starts the application's dev server **and** the locale editor UI simultaneously. The app dev command is auto-detected from `package.json → scripts.dev`.
-
-```bash
-vue-i18n-kit dev [options]
-```
-
-| Flag | Default | Description |
-|---|---|---|
-| `--ui-port <number>` | `4173` | Port for the locale editor UI server. |
-| `--app-cmd <command>` | auto-detected | Override the app dev command, e.g. `"nuxt dev"`. |
-
-**Auto-detection:** the package manager is inferred from lockfiles (`pnpm-lock.yaml` → `pnpm`, `yarn.lock` → `yarn`, otherwise `npm`). The resolved command is `<pm> run dev`.
-
-**Environment variable:** `vue-i18n-kit dev` sets `I18N_KIT_UI_URL=http://localhost:<ui-port>` in the app's environment. `vueI18nDevPlugin` reads this variable automatically so you can omit `uiUrl` from `vite.config.ts`:
-
-```ts
-// No uiUrl needed — vue-i18n-kit dev passes I18N_KIT_UI_URL automatically
-vueI18nDevPlugin()
-```
-
-Both processes are shut down together when you press `Ctrl+C`.
+| `phantom` | Show only keys used in code but absent from all locale files |
+| `stale` | Show only keys whose reference value changed since last review |
 
 ---
 
-### `vue-i18n-kit ui`
-
-```bash
-vue-i18n-kit ui [--port <number>]
-```
-
-| Flag | Default | Description |
-|---|---|---|
-| `--port <number>` | `4173` | Port for the local editor server. |
-
-### Running the editor without `auto-config`
-
-`auto-config` and `ui` are independent commands — the editor works fine without the auto-scan step. This is useful when `auto-config` cannot parse your locale setup (e.g. the locales object is imported from a separate file).
-
-**1.** Add `vueI18nMapPlugin` to your config manually using the same format shown in [What gets written to the project config](#what-gets-written-to-the-project-config) above.
-
-**2.** Run the editor directly — skip `auto-config` in the script:
-
-```json
-"i18n:ui": "vue-i18n-kit ui"
-```
-
-With a manually maintained config you are responsible for keeping `vueI18nMapPlugin` in sync when you add or rename locales. The recommended `auto-config && ui` combination does this automatically.
-
----
-
-## Base Dictionary (extends)
+## Base dictionary (extends)
 
 The `extends` field in `i18n-kit.config.json` lets a project inherit translations from a shared base — for example, a corporate terminology dictionary maintained centrally in a monorepo or npm package.
 
 ```json
 // i18n-kit.config.json
 {
-  "extends": "../../shared-i18n",
-  ...
+  "extends": "../../shared-i18n"
 }
 ```
 
-**How it works:**
-
-1. The value of `extends` is resolved relative to the project root.
-2. It can point to a directory containing locale JSON files (e.g. `en.json`, `ru.json`) or to another `i18n-kit.config.json` whose `localesDir` will be followed.
-3. When the editor reads a locale, base keys are merged underneath project keys — **the project always wins**. Base-only keys appear in the editor but are not written to project locale files on save.
+When the editor reads a locale, base keys are merged underneath project keys — **the project always wins**. Base-only keys appear in the editor but are not written to project locale files on save.
 
 **Typical structure:**
 
@@ -2015,23 +1371,14 @@ monorepo/
         └── ru.json
 ```
 
-**Combined with `merge`:**
-
-To copy base keys into project files permanently (rather than loading them dynamically), use the `merge` CLI command:
-
-```bash
-vue-i18n-kit merge ../shared-i18n/en.json --locale en
-vue-i18n-kit merge ../shared-i18n/ru.json --locale ru
-```
-
 ---
 
-## Locked Keys
+## Locked keys
 
-The `locked` field in the **base** config declares keys that child projects cannot modify. Locked keys behave like CSS `!important` — they propagate from the base dictionary and cannot be overridden downstream.
+The `locked` field in the **base** config declares keys that child projects cannot modify.
 
 ```jsonc
-// shared-i18n/i18n-kit.config.json (base config)
+// shared-i18n/i18n-kit.config.json
 {
   "localesDir": "locales",
   "locked": [
@@ -2053,52 +1400,38 @@ Locked key patterns support globs: `"legal.*"` (all keys under `legal`), `"brand
 
 ---
 
-## Validation Rules (`rules`)
+## Validation rules (`rules`)
 
-The `rules` section in `i18n-kit.config.json` configures the locale editor's validation behaviour. All fields are optional — defaults match the previous hardcoded values.
+The `rules` section in `i18n-kit.config.json` configures the locale editor's validation behaviour. All fields are optional.
 
 ```jsonc
 // i18n-kit.config.json
 {
   "rules": {
-    // Placeholder patterns — what counts as an interpolation variable
-    // Default: ["{var}"]  — also supports "{{var}}", ":param", "%(var)s"
     "interpolationPatterns": ["{var}", "{{var}}"],
-
-    // Length warning: warn if value.length > ref.length × factor
-    // Set to 0 to disable. Default: 2.5
     "lengthWarningFactor": 3,
-
-    // Warn when values contain HTML tags. Default: true
     "warnOnHtmlTags": true,
-
-    // Warn on malformed ICU (unclosed braces, missing other{}). Default: true
     "warnOnIcuErrors": true,
-
-    // Warn when a key has identical values across all locales. Default: true
     "warnOnDuplicateValues": true,
-
-    // Warn if value is shorter than this many characters. Default: 0 (off)
     "minValueLength": 0
   }
 }
 ```
 
-The same `rules` object can be passed to `vueI18nCheckPlugin`:
+| Field | Default | Description |
+|---|---|---|
+| `interpolationPatterns` | `["{var}"]` | What counts as an interpolation variable. Also supports `"{{var}}"`, `":param"`, `"%(var)s"`. |
+| `lengthWarningFactor` | `2.5` | Warn if value.length > ref.length × factor. Set to `0` to disable. |
+| `warnOnHtmlTags` | `true` | Warn when values contain HTML tags. |
+| `warnOnIcuErrors` | `true` | Warn on malformed ICU (unclosed braces, missing `other{}`). |
+| `warnOnDuplicateValues` | `true` | Warn if a key has identical values across all locales. |
+| `minValueLength` | `0` | Warn if value is shorter than this many characters (`0` = off). |
 
-```ts
-vueI18nCheckPlugin({
-  localesDir: 'src/locales',
-  rules: {
-    interpolationPatterns: ['{var}', '{{var}}'],
-    lengthWarningFactor: 3,
-  },
-})
-```
+The same `rules` object can be passed to `vueI18nCheckPlugin`.
 
 ---
 
-## Ignore Lists (`ignore`)
+## Ignore lists (`ignore`)
 
 The `ignore` section lets you whitelist keys and paths that would otherwise trigger warnings or be removed by CLI tools.
 
@@ -2106,33 +1439,20 @@ The `ignore` section lets you whitelist keys and paths that would otherwise trig
 // i18n-kit.config.json
 {
   "ignore": {
-    // Keys that prune will never remove — useful for dynamically referenced keys
-    // e.g. t('status.' + code)
     "prune": [
       "status.*",
-      "dynamic.*",
-      "legacy.migrated_key"
+      "dynamic.*"
     ],
-
-    // Keys excluded from "duplicate values" warnings
-    // Useful for brand names, numbers, abbreviations
     "duplicates": [
       "brand.name",
-      "brand.tagline",
       "app.version"
     ],
-
-    // Keys excluded from "unused" warnings in the editor
     "unused": [
       "seo.*",
       "meta.*"
     ],
-
-    // File/directory patterns excluded from the source code scanner
-    // In addition to built-in exclusions (node_modules, dist, etc.)
     "scanExclude": [
       "src/tests/**",
-      "src/__fixtures__/**",
       "scripts/**"
     ]
   }
@@ -2141,7 +1461,7 @@ The `ignore` section lets you whitelist keys and paths that would otherwise trig
 
 All patterns support glob syntax: `*` matches any single segment, `**` matches any number of path segments.
 
-`ignore.prune` patterns are also respected by the `prune --dry` preview, so you can see exactly what would be removed without the whitelisted keys.
+`ignore.prune` patterns are also respected by the `prune --dry` preview.
 
 ---
 
@@ -2152,8 +1472,6 @@ All patterns support glob syntax: `*` matches any single segment, `**` matches a
 `localStorage` calls (used by `persistLocale`) are silently no-op on the server — `try/catch` handles the missing global.
 
 ### Nuxt setup
-
-**1. Create `plugins/i18n.ts`:**
 
 ```ts
 // plugins/i18n.ts
@@ -2180,20 +1498,9 @@ export default defineNuxtPlugin((nuxtApp) => {
 })
 ```
 
-**2. Use composables in components — same as SPA:**
-
-```vue
-<script setup lang="ts">
-import { useT, useLocale } from 'vue-i18n-kit'
-
-const { t } = useT()
-const { locale, setLocale } = useLocale()
-</script>
-```
-
 ### Server-side locale detection
 
-To pick the locale based on the `Accept-Language` header instead of a fixed default, read it in the plugin before calling `createVueI18nPlugin`:
+To pick the locale based on the `Accept-Language` header:
 
 ```ts
 // plugins/i18n.ts
@@ -2222,84 +1529,68 @@ export default defineNuxtPlugin((nuxtApp) => {
 
 ### Notes
 
-- **`persistLocale`** — works on the client only; on the server it is silently ignored (no `localStorage`). It is safe to leave `persistLocale: true` in a Nuxt app — the plugin handles the missing global.
-- **Hydration** — the server and client render with the same `defaultLocale` (or the detected one). If you use `persistLocale`, the client will restore the user's saved locale after hydration.
+- **`persistLocale`** — works on the client only; on the server it is silently ignored.
+- **Hydration** — the server and client render with the same `defaultLocale`. If you use `persistLocale`, the client will restore the user's saved locale after hydration.
 - **Vite plugin and CLI** — work the same way in Nuxt projects. Add `vueI18nMapPlugin` to `nuxt.config.ts` under `vite.plugins`.
-- **`plugin.service` in Nuxt** — create the plugin inside `defineNuxtPlugin` (not at module level) so each SSR request gets its own `service` instance. See [SSR note](#ssr-note) in the Plugin Service section.
+- **`plugin.service` in Nuxt** — create the plugin inside `defineNuxtPlugin` (not at module level) so each SSR request gets its own `service` instance.
 
 ---
 
-## Advanced: Passing Extra vue-i18n Options
-
-Anything accepted by `vue-i18n`'s `createI18n` can be forwarded through `vueI18nOptions`:
-
-```ts
-app.use(createVueI18nPlugin({
-  defaultLocale: 'en',
-  locales: { en: enMessages },
-  vueI18nOptions: {
-    warnHtmlMessage: false,
-    missingWarn: false,
-    fallbackWarn: false,
-  },
-}))
-```
-
----
-
-## Project Structure (package internals)
+## Architecture
 
 ```
-src/
-├── index.ts                        # Public API re-exports (browser/universal)
-├── plugin.ts                       # createVueI18nPlugin()
-├── createI18n.ts                   # vue-i18n instance factory
-├── state.ts                        # Per-app state via provide/inject (SSR-safe)
-├── types/
-│   └── index.ts                    # I18nPluginOptions, LocaleMessages, LocaleEntry
+vue-i18n-kit
+│
+├── plugin.ts
+│     createVueI18nPlugin() — installs vue-i18n, pre-loads defaultLocale/fallbackLocale,
+│     stores I18nService via app.provide(); returns Plugin & { service }
+│
+├── state.ts
+│     Per-app state via provide/inject — locale Ref, isLoading Ref, availableLocales,
+│     subscribers list, messages cache; SSR-safe (no module-level singletons)
+│
 ├── composables/
-│   ├── useLocale.ts                # locale, setLocale, isLoading, localeMeta
-│   ├── useT.ts                     # t(), tm()
-│   ├── useAvailableLocales.ts      # availableLocales
-│   ├── useFormat.ts                # formatDate, formatNumber, formatCurrency
-│   └── usePluralize.ts             # pluralCategory + engine powering tm() (Intl.PluralRules)
+│     useLocale()           — locale, setLocale, isLoading, localeMeta
+│     useT()                — t() key lookup + interpolation; tm() ICU pluralization
+│     useAvailableLocales() — computed list of { code, meta } from registered locales
+│     useFormat()           — formatDate / formatNumber / formatCurrency via Intl
+│     usePluralize()        — Intl.PluralRules engine powering tm(); exports pluralCategory()
+│
 ├── utils/
-│   ├── loadLocale.ts               # Resolves sync objects and async loaders
-│   ├── persistLocale.ts            # localStorage read / write helpers
-│   ├── localeKeys.ts               # flattenKeys, compareLocales (shared by CLI + Vite plugin)
-│   └── localeEntry.ts              # isLocaleDefinition, extractMessages, extractMeta
+│     loadLocale.ts    — resolves sync objects and async loaders; caches by locale code
+│     persistLocale.ts — localStorage read / write helpers (try/catch for SSR/private mode)
+│     localeKeys.ts    — flattenKeys, compareLocales (shared by CLI + Vite plugin)
+│     localeEntry.ts   — isLocaleDefinition, extractMessages, extractMeta
+│
 ├── vite-plugin/
-│   └── index.ts                    # vueI18nCheckPlugin + vueI18nMapPlugin (Node.js, optional)
-├── ui-app/                         # Locale editor Vue SPA (built to dist/ui-server/public/)
-│   ├── index.html
-│   ├── main.ts
-│   ├── App.vue
-│   ├── api.ts
-│   └── components/
-│       └── LocaleTable.vue
+│     vueI18nCheckPlugin     — buildStart + HMR key-diff against reference locale
+│     vueI18nInlinePlugin    — virtual:vue-i18n-kit/locales (bakes JSON into bundle)
+│     vueI18nNamespacePlugin — virtual:vue-i18n-namespaces (per-namespace dynamic imports)
+│     vueI18nDevPlugin       — SFC template rewrite (auto-wrap); injects I18nInspect overlay
+│     vueI18nMapPlugin       — locales map for the editor server (written by auto-config)
+│
+├── ui-app/               — Locale editor Vue SPA (built to dist/ui-server/public/)
+│     App.vue, LocaleTable.vue, Dashboard.vue, api.ts
+│
 ├── ui-server/
-│   └── server.ts                   # Node.js HTTP server for the locale editor
+│     server.ts           — Node.js HTTP server; reads/writes locale JSON; SSE for live reload
+│
 └── cli/
-    ├── index.ts                    # CLI entry point (bin: vue-i18n-kit)
-    └── commands/
-        ├── init.ts                 # vue-i18n-kit init
-        ├── add.ts                  # vue-i18n-kit add <locale>
-        ├── check.ts                # vue-i18n-kit check
-        ├── merge.ts                # vue-i18n-kit merge
-        ├── prune.ts                # vue-i18n-kit prune
-        ├── types.ts                # vue-i18n-kit types
-        ├── stale.ts                # vue-i18n-kit stale
-        ├── export-translations.ts  # vue-i18n-kit export
-        └── import-translations.ts  # vue-i18n-kit import
+      init / add / check / merge / prune / types / split / merge-ns
+      stale / export / import / stats / auto-config / ui / dev
 ```
 
-The package ships three independent entry points:
+---
 
-| Import | Description |
-|---|---|
-| `vue-i18n-kit` | Runtime composables and plugin — for Vue apps |
-| `vue-i18n-kit/vite` | Vite plugins (`vueI18nCheckPlugin`, `vueI18nMapPlugin`) — for `vite.config.ts` |
-| `vue-i18n-kit` (bin) | CLI — `init`, `add`, `check`, `ui` commands |
+## Bundle size & peer dependencies
+
+| Entry point | Peer deps | Notes |
+|---|---|---|
+| `vue-i18n-kit` | `vue ^3.3`, `vue-i18n ^9.0` | Runtime composables and plugin — for Vue apps |
+| `vue-i18n-kit/vite` | `vue ^3.3`, `vite >=5.0` (optional) | Vite plugins — for `vite.config.ts` |
+| `vue-i18n-kit` (bin) | — | CLI — `init`, `add`, `check`, `ui`, `dev`, and more |
+
+The package ships as tree-shakeable ESM (`dist/index.mjs`) and CommonJS (`dist/index.cjs`). Composables that are not used are tree-shaken away. The Vite plugins and CLI are not included in the browser bundle.
 
 ---
 
@@ -2322,19 +1613,7 @@ npm run test:watch
 npm run typecheck
 ```
 
-### Running tests
-
-Tests are written with [Vitest](https://vitest.dev/) and [`@vue/test-utils`](https://test-utils.vuejs.org/). The test suite covers:
-
-| Test file | What is covered |
-|---|---|
-| `tests/plugin.test.ts` | Plugin installation, initial locale, lazy pre-loading, `persistLocale` restore logic, `service` property (pre-install guards, post-install refs, `onLocaleChange` subscribe/unsubscribe) |
-| `tests/useLocale.test.ts` | `locale` ref, `setLocale`, `isLoading` flag, lazy caching, error handling, `localeMeta` |
-| `tests/useT.test.ts` | `t()` key lookup and interpolation; `tm()` ICU pluralization via key and direct template |
-| `tests/useFormat.test.ts` | `formatDate`, `formatNumber`, `formatCurrency`, locale reactivity |
-| `tests/usePluralize.test.ts` | ICU engine: Russian/English forms, `#` replacement, `other` fallback, `pluralCategory`, locale reactivity |
-| `tests/localeKeys.test.ts` | `flattenKeys` (nested objects, arrays, null), `compareLocales` (missing / extra / multiple locales) |
-| `tests/localeEntry.test.ts` | `isLocaleDefinition`, `extractMessages`, `extractMeta` disambiguation |
+Tests are written with [Vitest](https://vitest.dev/) and [`@vue/test-utils`](https://test-utils.vuejs.org/). The test suite covers the plugin, all composables, the ICU engine, locale key utilities, and the `LocaleEntry` disambiguation logic.
 
 ---
 
