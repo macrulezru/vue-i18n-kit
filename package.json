@@ -1,6 +1,6 @@
 {
   "name": "vue-i18n-kit",
-  "version": "0.4.4",
+  "version": "0.4.5",
   "description": "Vue 3 localization plugin with lazy loading, composables, CLI, and Vite integration",
   "main": "./dist/index.js",
   "module": "./dist/index.mjs",
@@ -33,12 +33,14 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "demo": "npm run build && npm --prefix demo install && npm --prefix demo run dev",
+    "demo:full": "npm run build && npm --prefix demo install && npm --prefix demo run dev:full"
   },
   "peerDependencies": {
     "vite": ">=5.0.0",
     "vue": "^3.3.0",
-    "vue-i18n": "^9.0.0"
+    "vue-i18n": "^11.0.0"
   },
   "peerDependenciesMeta": {
     "vite": {
@@ -55,7 +57,7 @@
     "vite": "^5.4.14",
     "vitest": "^2.1.8",
     "vue": "^3.5.13",
-    "vue-i18n": "^9.14.1"
+    "vue-i18n": "^11.4.5"
   },
   "keywords": [
     "vue",

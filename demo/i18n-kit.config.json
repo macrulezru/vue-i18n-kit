@@ -1,0 +1,51 @@
+{
+  "version": 1,
+  "localesDir": "src/locales",
+  "toolkitDir": "i18n-tools",
+  "locales": [
+    {
+      "code": "en",
+      "path": "src/locales/en.json",
+      "meta": { "display": "English", "flag": "🇬🇧", "direction": "ltr" },
+      "createdAt": "2026-01-01T00:00:00.000Z",
+      "updatedAt": "2026-06-09T00:00:00.000Z"
+    },
+    {
+      "code": "ru",
+      "path": "src/locales/ru.json",
+      "meta": { "display": "Русский", "flag": "🇷🇺", "direction": "ltr" },
+      "createdAt": "2026-01-01T00:00:00.000Z",
+      "updatedAt": "2026-06-09T00:00:00.000Z"
+    },
+    {
+      "code": "de",
+      "path": "src/locales/de.json",
+      "meta": { "display": "Deutsch", "flag": "🇩🇪", "direction": "ltr" },
+      "createdAt": "2026-01-01T00:00:00.000Z",
+      "updatedAt": "2026-06-09T00:00:00.000Z"
+    }
+  ],
+  "rules": {
+    "lengthWarningFactor": 3,
+    "warnOnHtmlTags": true,
+    "warnOnIcuErrors": true,
+    "warnOnDuplicateValues": false
+  },
+  "ignore": {
+    "prune": [],
+    "duplicates": [],
+    "unused": [],
+    "scanExclude": ["node_modules/**", "dist/**"]
+  },
+  "staleTracking": false,
+  "namespaces": false,
+  "memory": { "enabled": true },
+  "scanner": {
+    "include": ["src/**/*.{vue,ts,js}"],
+    "exclude": ["node_modules/**", "dist/**"]
+  },
+  "integrations": {
+    "pluginAdded": true,
+    "lastUpdated": "2026-06-09T00:00:00.000Z"
+  }
+}

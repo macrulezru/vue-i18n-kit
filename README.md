@@ -17,6 +17,7 @@ A reusable Vue 3 localization plugin that wraps [`vue-i18n`](https://vue-i18n.in
 
 - [Features](#features)
 - [Requirements](#requirements)
+- [Demo](#demo)
 - [Installation](#installation)
 - [Quick start](#quick-start)
 - [Plugin options](#plugin-options)
@@ -96,10 +97,40 @@ A reusable Vue 3 localization plugin that wraps [`vue-i18n`](https://vue-i18n.in
 | Peer dependency | Version | Required |
 |---|---|---|
 | `vue` | `^3.3.0` | yes |
-| `vue-i18n` | `^9.0.0` | yes |
+| `vue-i18n` | `^11.0.0` | yes |
 | `vite` | `>=5.0.0` | only for the Vite plugin |
 
 Neither `vue` nor `vue-i18n` is bundled — they must be installed in the consuming project.
+
+---
+
+## Demo
+
+The `demo/` folder contains a ready-to-run Vue 3 app that showcases the key features of vue-i18n-kit: lazy locale loading, ICU plurals, locale-aware formatting, and the in-context translation editor.
+
+**What the demo includes:**
+
+- Three locales — English (full), Russian (full, with `one/few/many/other` plurals), German (intentionally incomplete — 8 keys missing to demonstrate the editor)
+- EN loaded synchronously, RU/DE lazy-loaded on demand — Vite code-splits them into separate chunks
+- `useT` / `tm()` with ICU plural sliders — move the slider to watch plural forms change in real time
+- `useFormat` formatting — numbers, currency, and dates rendered with `Intl` and the active locale
+- `useLocale` locale switcher with loading indicator while the new locale chunk is fetched
+- Dev overlay — hover any translated text to see a pencil icon; click it to open the inline key editor. Only works with `npm run demo:full` (pencil icons are not injected in plain `npm run demo`)
+- **Editor UI button** — when running `demo:full`, a purple **"Editor UI ↗"** button appears in the top-right corner of the NavBar; click it to open the full dictionary editor at `http://localhost:4173`
+
+**Run from the repository root:**
+
+```bash
+# Build the package, install demo dependencies, start Vite dev server
+npm run demo           # app → http://localhost:5173
+
+# Same as above + starts the full dictionary editor UI
+npm run demo:full      # app → http://localhost:5173  |  editor → http://localhost:4173
+```
+
+`npm run demo:full` uses `vue-i18n-kit dev` under the hood, which spawns both the Vite app server and the UI editor server in parallel and wires them together automatically.
+
+> **Note:** Both scripts rebuild the package first so the dev overlay bundle is always up to date.
 
 ---
 
