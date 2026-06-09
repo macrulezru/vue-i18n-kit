@@ -1,0 +1,42 @@
+{
+  "nav": {
+    "home": "Home",
+    "stats": "Statistics"
+  },
+  "home": {
+    "title": "vue-i18n-kit Demo",
+    "subtitle": "In-context editing · Lazy loading · ICU plurals",
+    "greeting": "Hello, {name}!",
+    "name_placeholder": "Enter your name…",
+    "features": {
+      "lazy": "Lazy Loading",
+      "lazy_desc": "Locale files are loaded on demand — only when the user switches language.",
+      "icu": "ICU Plurals",
+      "icu_desc": "Native plural rules for every language via Intl.PluralRules. No pipe separators.",
+      "editor": "Visual Editor",
+      "editor_desc": "Hover any translated text to edit it in context. Saves to disk with live HMR."
+    }
+  },
+  "stats": {
+    "title": "Statistics",
+    "subtitle": "Numbers and dates formatted with the active locale",
+    "users": "{count, plural, one {# user} other {# users}}",
+    "orders": "{count, plural, one {# order} other {# orders}}",
+    "messages": "{count, plural, one {# message} other {# messages}}",
+    "revenue": "Revenue",
+    "report_date": "Report date",
+    "growth": "Growth this month"
+  },
+  "locale": {
+    "label": "Language",
+    "hint": "Switch language to see lazy loading and the editor in action"
+  },
+  "common": {
+    "loading": "Loading…",
+    "try_editor": "Hover any text to open the inline editor"
+  },
+  "footer": {
+    "tagline": "Built with vue-i18n-kit · Open source · MIT",
+    "version": "v{version}"
+  }
+}

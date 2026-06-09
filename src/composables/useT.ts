@@ -1,5 +1,6 @@
 import { useI18n } from 'vue-i18n'
 import type { ComposerTranslation } from 'vue-i18n'
+import { useI18nKitState } from '../state'
 import { usePluralize } from './usePluralize'
 import type { PluralVars } from './usePluralize'
 
@@ -45,19 +46,41 @@ export interface UseTReturn {
   tm: (keyOrTemplate: string, vars: PluralVars) => string
 }
 
+// Reads a dot-notation key from a raw messages object without going through
+// vue-i18n's message compiler (which rejects ICU plural syntax in v11+).
+function getRawMessage(messages: Record<string, unknown>, key: string): string | undefined {
+  const parts = key.split('.')
+  let cur: unknown = messages
+  for (const p of parts) {
+    if (typeof cur !== 'object' || cur === null) return undefined
+    cur = (cur as Record<string, unknown>)[p]
+  }
+  return typeof cur === 'string' ? cur : undefined
+}
+
 /**
  * Returns `t` for simple key-based translations and `tm` for ICU-pluralized translations.
  * Both methods are locale-reactive and automatically update when the active locale changes.
  */
 export function useT(): UseTReturn {
   const { t } = useI18n()
+  const state = useI18nKitState()
   const { pluralizeIcu } = usePluralize()
 
   function tm(keyOrTemplate: string, vars: PluralVars): string {
-    // t() returns the key itself when the key is not found in any locale —
-    // in that case the raw ICU template string is used directly.
-    const template = t(keyOrTemplate) as string
-    return pluralizeIcu(vars, template)
+    // Retrieve the raw message string directly from the loaded messages object,
+    // bypassing vue-i18n's message compiler which rejects ICU plural syntax in v11+.
+    const locale = state.i18n.global.locale.value as string
+    const msgs = state.i18n.global.getLocaleMessage(locale) as Record<string, unknown>
+    let template = getRawMessage(msgs, keyOrTemplate)
+
+    if (template === undefined && state.options.fallbackLocale) {
+      const fb = state.i18n.global.getLocaleMessage(state.options.fallbackLocale) as Record<string, unknown>
+      template = getRawMessage(fb, keyOrTemplate)
+    }
+
+    // When the key is not found, treat the argument itself as a direct ICU template.
+    return pluralizeIcu(vars, template ?? keyOrTemplate)
   }
 
   return { t, tm }

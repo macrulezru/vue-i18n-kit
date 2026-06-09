@@ -1,0 +1,34 @@
+{
+  "nav": {
+    "home": "Startseite",
+    "stats": "Statistiken"
+  },
+  "home": {
+    "title": "vue-i18n-kit Demo",
+    "subtitle": "Kontextuelles Bearbeiten · Lazy Loading · ICU-Plurale",
+    "greeting": "Hallo, {name}!",
+    "name_placeholder": "Name eingeben…",
+    "features": {
+      "lazy": "Lazy Loading",
+      "lazy_desc": "Locale-Dateien werden bei Bedarf geladen — nur beim Sprachwechsel.",
+      "icu": "ICU-Plurale",
+      "icu_desc": "Native Pluralregeln für jede Sprache via Intl.PluralRules.",
+      "editor": "Visueller Editor",
+      "editor_desc": "Maus über Text bewegen, um ihn direkt im Kontext zu bearbeiten."
+    }
+  },
+  "stats": {
+    "title": "Statistiken",
+    "users": "{count, plural, one {# Benutzer} other {# Benutzer}}",
+    "orders": "{count, plural, one {# Bestellung} other {# Bestellungen}}"
+  },
+  "locale": {
+    "label": "Sprache"
+  },
+  "common": {
+    "loading": "Laden…"
+  },
+  "footer": {
+    "tagline": "Erstellt mit vue-i18n-kit · Open Source · MIT"
+  }
+}

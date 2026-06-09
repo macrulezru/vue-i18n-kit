@@ -628,9 +628,10 @@ export interface I18nDevPluginOptions {
  * When active the plugin:
  * 1. Injects a virtual module into the page that mounts the `DevOverlay`
  *    as a standalone Vue app on `document.body`.
- * 2. Exposes `window.__I18N_KIT_INSPECT_COMPONENT__` so the `I18nInspect`
- *    component can be registered in the user app (done automatically by the
- *    transform sub-plugin added in a later iteration).
+ * 2. Transforms the app entry module to auto-register `I18nInspect` and
+ *    `v-i18n-inspect` on every Vue app created via `createApp`, picking up
+ *    the component/directive exposed on `window.__I18N_KIT_INSPECT_COMPONENT__`
+ *    and `window.__I18N_KIT_INSPECT_DIRECTIVE__` by the overlay bootstrap.
  * 3. Sets `window.__I18N_KIT_UI_URL__` for the overlay to communicate with
  *    the `vue-i18n-kit ui` server.
  *
@@ -682,10 +683,17 @@ export function vueI18nDevPlugin(options: I18nDevPluginOptions = {}): VitePlugin
     },
 
     transform(code: string, id: string) {
-      if (!isServe || !autoWrap) return
-      // Only raw .vue files (no query params — those are compiled sub-blocks)
-      if (!id.endsWith('.vue') || id.includes('?')) return
-      return wrapTranslationCalls(code, wrapFunctions)
+      if (!isServe) return
+
+      // Wrap {{ t() }} in .vue SFC templates with <I18nInspect>
+      if (autoWrap && id.endsWith('.vue') && !id.includes('?')) {
+        return wrapTranslationCalls(code, wrapFunctions)
+      }
+
+      // Auto-register I18nInspect and v-i18n-inspect in the Vue app entry file
+      if (/\.(m?[tj]s)$/.test(id) && !id.includes('?') && !id.includes('node_modules')) {
+        return injectInspectRegistration(code)
+      }
     },
 
     // Use `src` pointing at the canonical Vite virtual-module URL so the
@@ -802,6 +810,44 @@ export function wrapTranslationCalls(source: string, fnAliases: string[]): strin
 
   if (result === content) return
   return before + result + after
+}
+
+/**
+ * Transforms a Vue app entry (`.ts` / `.js`) file to auto-register the
+ * `I18nInspect` component and `v-i18n-inspect` directive on every Vue app
+ * created via `createApp`.
+ *
+ * The overlay bootstrap sets `window.__I18N_KIT_INSPECT_COMPONENT__` and
+ * `window.__I18N_KIT_INSPECT_DIRECTIVE__` before the entry module runs (it
+ * is injected into `<head>` while the entry is in `<body>`).  This transform
+ * wraps the `createApp` import so those globals are picked up automatically —
+ * no manual registration needed in the user app.
+ *
+ * @internal used by `vueI18nDevPlugin`
+ */
+export function injectInspectRegistration(code: string): string | undefined {
+  // Early exit: no createApp in this file, or already patched
+  if (!code.includes('createApp') || code.includes('__ik_createApp')) return
+
+  // Match: import { ..., createApp, ... } from 'vue'
+  const importRe = /(import\s*\{[^}]*)\bcreateApp\b([^}]*\}\s*from\s*['"]vue['"])/
+  if (!importRe.test(code)) return
+
+  const wrappedFn = `
+const createApp = (...args) => {
+  const __app = __ik_createApp(...args)
+  if (typeof window !== 'undefined') {
+    const __c = window['__I18N_KIT_INSPECT_COMPONENT__']
+    const __d = window['__I18N_KIT_INSPECT_DIRECTIVE__']
+    if (__c) __app.component('I18nInspect', __c)
+    if (__d) __app.directive('i18n-inspect', __d)
+  }
+  return __app
+}`
+
+  return code.replace(importRe, (_, before, after) =>
+    `${before}createApp as __ik_createApp${after}${wrappedFn}`,
+  )
 }
 
 /**
