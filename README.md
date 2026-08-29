@@ -1,13 +1,6 @@
-<div align="center" style="background:#111827;border-radius:20px;padding:28px 20px 20px;margin-bottom:32px">
-  <h1 style="color:#f9fafb;margin:0 0 32px;font-size:2.2em;letter-spacing:-0.03em;font-weight:700;font-family:sans-serif">
-    vue-i18n-kit
-  </h1>
-  <img
-    src="https://s3.twcstorage.ru/c9a2cc89-780f97fd-311d-4a1a-b86f-c25665c9dc46/images/npm/vue-i18n-kit.webp"
-    alt="vue-i18n-kit"
-    style="max-width:100%;width:auto;height:300px;border-radius:12px"
-  />
-</div>
+# **i18n Kit**
+
+![i18n Kit](https://github.com/macrulezru/assets/blob/master/packages-images/vue-i18n-kit.png?raw=true)
 
 A reusable Vue 3 localization plugin that wraps [`vue-i18n`](https://vue-i18n.intlify.dev/) and provides a ready-to-use integration layer — set up once, reuse across every project in your team.
 
@@ -1658,7 +1651,7 @@ MIT
 
 Danil Lisin Vladimirovich aka Macrulez
 
-GitHub: [macrulezru](https://github.com/macrulezru) · Website: [macrulez.ru/en](https://macrulez.ru/en)
+GitHub: [macrulezru](https://github.com/macrulezru) · Website: [npm.vuecraft.ru/en/](https://npm.vuecraft.ru/en/packages/vue-i18n-kit/)
 
 Bugs and questions — [issues](https://github.com/macrulezru/vue-i18n-kit/issues)
 
