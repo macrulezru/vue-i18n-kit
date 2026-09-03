@@ -1,6 +1,6 @@
 {
   "name": "vue-i18n-kit",
-  "version": "0.4.7",
+  "version": "0.4.8",
   "description": "Vue 3 i18n layer over vue-i18n with lazy locale loading, composables, a Vite plugin and a CLI for extracting and managing translations.",
   "author": "macrulez <macrulezru@gmail.com> (https://macrulez.ru/en)",
   "license": "MIT",
@@ -31,6 +31,11 @@
       "types": "./dist/vite-plugin/index.d.ts",
       "import": "./dist/vite-plugin/index.mjs",
       "require": "./dist/vite-plugin/index.js"
+    },
+    "./config": {
+      "types": "./dist/config/index.d.ts",
+      "import": "./dist/config/index.mjs",
+      "require": "./dist/config/index.js"
     }
   },
   "files": [

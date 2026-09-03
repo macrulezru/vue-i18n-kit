@@ -26,6 +26,15 @@ export default defineConfig([
     shims: true,
   },
 
+  // ── Config schema types (public, types-only — no runtime exports) ──────────
+  {
+    entry: { 'config/index': 'src/config/public.ts' },
+    format: ['esm', 'cjs'],
+    dts: true,
+    sourcemap: false,
+    platform: 'node',
+  },
+
   // ── CLI (Node.js executable, CJS only) ─────────────────────────────────────
   {
     entry: { 'cli/index': 'src/cli/index.ts' },

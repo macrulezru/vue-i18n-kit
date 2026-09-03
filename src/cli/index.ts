@@ -13,8 +13,12 @@ import { runSplit } from './commands/split.js'
 import { runMergeNs } from './commands/merge-ns.js'
 import { runDev } from './commands/dev.js'
 import { startUiServer } from '../ui-server/server.js'
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 
-const VERSION = '0.3.0'
+const VERSION = (
+  JSON.parse(readFileSync(join(__dirname, '../../package.json'), 'utf-8')) as { version: string }
+).version
 
 const [, , command, ...rest] = process.argv
 

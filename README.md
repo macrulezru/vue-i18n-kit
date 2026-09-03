@@ -950,7 +950,7 @@ For runtime keys (variables, computed values, loop indices) use the directive wh
 | `uiUrl` | `string` | `I18N_KIT_UI_URL` env or `'http://localhost:4173'` | URL of the running `vue-i18n-kit ui` server. |
 | `autoWrap` | `boolean` | `true` | Automatically wrap `t()` / `tm()` / `$t()` interpolations with `<I18nInspect>` at dev time. |
 | `wrapFunctions` | `string[]` | `['t', 'tm', '$t']` | Function names to look for when `autoWrap` is enabled. |
-| `iframeWidth` | `string` | `'480px'` | Width of the right-side iframe editor panel. |
+| `iframeWidth` | `string` | `'100vw'` | Width of the right-side iframe editor panel. |
 
 ---
 
@@ -1610,11 +1610,12 @@ vue-i18n-kit
 
 | Entry point | Peer deps | Notes |
 |---|---|---|
-| `vue-i18n-kit` | `vue ^3.3`, `vue-i18n ^9.0` | Runtime composables and plugin — for Vue apps |
+| `vue-i18n-kit` | `vue ^3.3`, `vue-i18n ^11.0` | Runtime composables and plugin — for Vue apps |
 | `vue-i18n-kit/vite` | `vue ^3.3`, `vite >=5.0` (optional) | Vite plugins — for `vite.config.ts` |
+| `vue-i18n-kit/config` | — | Types-only: `I18nKitRules`, `I18nKitIgnore` |
 | `vue-i18n-kit` (bin) | — | CLI — `init`, `add`, `check`, `ui`, `dev`, and more |
 
-The package ships as tree-shakeable ESM (`dist/index.mjs`) and CommonJS (`dist/index.cjs`). Composables that are not used are tree-shaken away. The Vite plugins and CLI are not included in the browser bundle.
+The package ships as tree-shakeable ESM (`dist/index.mjs`) and CommonJS (`dist/index.js`). Composables that are not used are tree-shaken away. The Vite plugins and CLI are not included in the browser bundle.
 
 ---
 

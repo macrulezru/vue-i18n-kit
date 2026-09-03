@@ -11,6 +11,15 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.4.8] — 2026-09-03
+
+### Fixed
+
+- CLI `--version`/`-v` hardcoded `0.3.0` regardless of the installed package version — now reads the real version from `package.json` at runtime
+- `vue-i18n-kit/config` — documented since 0.3.0 as exporting `I18nKitRules`/`I18nKitIgnore`, but never actually built or added to `package.json`'s `exports` map, so the import always failed. Now a real, types-only subpath export.
+
+---
+
 ## [0.4.0] — 2026-04-12
 
 ### Added
