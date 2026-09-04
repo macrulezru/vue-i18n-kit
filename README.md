@@ -140,6 +140,71 @@ const { availableLocales } = useAvailableLocales()
 </template>
 ```
 
+### More examples
+
+#### Dates, numbers, and currency adapt themselves to the language
+
+`formatDate`/`formatNumber`/`formatCurrency` wrap the native Intl APIs, follow the active locale, and re-render themselves the moment it switches — no hand-rolled per-language formatting.
+
+```ts
+import { useFormat } from 'vue-i18n-kit'
+
+const { formatDate, formatNumber, formatCurrency } = useFormat()
+
+formatDate(new Date(), { dateStyle: 'long' }) // '28 марта 2026 г.'  (ru)
+formatNumber(1_234_567.89) // '1 234 567,89'     (ru)
+formatCurrency(1999.99, 'EUR') // '1 999,99 €'       (ru)
+
+// Switch the active locale and every formatter re-renders itself — no
+// manual re-formatting, no separate en/ru number-formatting code paths.
+```
+
+#### Pluralization that actually handles Russian
+
+One ICU template, and `Intl.PluralRules` picks the right form — one/few/many/other — instead of a hand-rolled if/else chain per number.
+
+```ts
+import { useT } from 'vue-i18n-kit'
+
+const { tm } = useT()
+
+// locale: "{points} {points, plural, one {рубль} few {рубля} many {рублей} other {рублей}}"
+tm('balance', { points: 1 }) // → '1 рубль'
+tm('balance', { points: 3 }) // → '3 рубля'
+tm('balance', { points: 21 }) // → '21 рубль'
+tm('balance', { points: 25 }) // → '25 рублей'
+
+// Same template, four different real Russian plural forms — driven by
+// Intl.PluralRules under the hood, not a hand-rolled if/else chain.
+```
+
+#### A forgotten translation breaks the build, not production
+
+The Vite plugin diffs every locale against the reference one on every save and on build — a missing key surfaces in seconds, not after a user complaint.
+
+```ts
+import { vueI18nCheckPlugin } from 'vue-i18n-kit/vite'
+
+export default defineConfig({
+  plugins: [
+    vue(),
+    vueI18nCheckPlugin({
+      localesDir: 'src/locales',
+      defaultLocale: 'en',
+      failOnMissing: true,
+    }),
+  ],
+})
+
+// Runs on every locale-file save (HMR) and again at build start:
+//
+// [vue-i18n-kit] Incomplete translations detected (reference: "en"):
+//   Locale "ru":
+//     Missing keys (2):
+//       - buttons.cancel
+//       - profile.title
+```
+
 ---
 
 ## Documentation & links
