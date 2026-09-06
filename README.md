@@ -42,6 +42,19 @@ A reusable Vue 3 localization plugin that wraps [`vue-i18n`](https://vue-i18n.in
 
 ---
 
+## When you'd reach for this
+
+A missing translation key doesn't break the build or throw a console error — it just shows the user a raw identifier instead of text, and the first person to notice is usually the user, not the developer. vue-i18n-kit checks every locale for completeness right at build time, before it ever gets that far.
+
+- **"1 file" and "5 files" are different forms, and not just in Russian** — English has one plural form, Russian has three, Arabic has six — the grammatically correct form is picked automatically for each language instead of one string with a number dropped in.
+- **A translator doesn't need to read code to fix a typo** — A typo in a button's text can be fixed by someone who's never opened a code editor — right in the browser, with a table of keys and a live preview, no repository access required.
+- **A new language shouldn't slow the site down for everyone else** — A user in Germany shouldn't have to download a Japanese translation just because the site supports 12 languages — each locale loads separately, and only when it's actually needed.
+- **Translation is needed where there's no component to reach it from** — An error message in an HTTP interceptor, text in a state store, a check inside a router guard — translation stays available in exactly the places where the usual way of reaching it from inside a component won't work.
+- **Different client releases are built from one codebase** — Each client gets its own set of copy on top of one shared base — some strings are identical everywhere, some are overridden for a specific brand. The shared dictionary can be safely merged into each client's files: missing strings get added, while anything already overridden for a brand stays untouched instead of getting clobbered by mistake.
+- **Nothing should be missing right before a release** — A developer adds a new screen and forgets to translate it into three of the five languages — that's catchable with one command that compares every locale against the reference and reports which keys are missing and which aren't used anywhere anymore.
+
+---
+
 ## Installation
 
 | Peer dependency | Version   | Required                 |
