@@ -1,6 +1,6 @@
 {
   "name": "vue-i18n-kit",
-  "version": "0.4.11",
+  "version": "0.4.12",
   "description": "Vue 3 i18n layer over vue-i18n with lazy locale loading, composables, a Vite plugin and a CLI for extracting and managing translations.",
   "author": "macrulez <macrulezru@gmail.com> (https://macrulez.ru/en)",
   "license": "MIT",
@@ -54,6 +54,7 @@
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
     "typecheck": "tsc --noEmit",
+    "typecheck:tests": "tsc --noEmit -p tests/tsconfig.json",
     "demo": "npm run build && npm --prefix demo install && npm --prefix demo run dev",
     "demo:full": "npm run build && npm --prefix demo install && npm --prefix demo run dev:full"
   },
